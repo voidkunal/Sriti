@@ -12,8 +12,9 @@ import plotly.express as px
 # ---------------- UI CONFIG ----------------
 st.set_page_config(page_title="Memory Vault Dashboard", page_icon="🌐", layout="wide")
 
-# ---------------- CONFIG ----------------
-MONGO_URI = "mongodb+srv://kunalmandal1604_db_user:miyakhalifa10@album.uaktecw.mongodb.net/?appName=album"
+# ---------------- CONFIG (PRODUCTION SAFE) ----------------
+# Fetching secrets securely from Streamlit Cloud
+MONGO_URI = st.secrets["MONGO_URI"]
 
 client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where())
 db = client["memory_vault"]
@@ -23,9 +24,9 @@ files_col = db["files"]
 folders_col = db["folders"]
 
 cloudinary.config(
-    cloud_name="dhb2sfajq",
-    api_key="554216984131877",
-    api_secret="LeS09uiohF6dKcW0Eet-yCiUJyM"
+    cloud_name=st.secrets["CLOUDINARY_CLOUD_NAME"],
+    api_key=st.secrets["CLOUDINARY_API_KEY"],
+    api_secret=st.secrets["CLOUDINARY_API_SECRET"]
 )
 
 # ---------------- CSS (LIQUID GLASS DASHBOARD THEME) ----------------
@@ -437,10 +438,7 @@ else:
         st.session_state.logged_in = False
         st.session_state.current_folder = None
         st.rerun()
-    if st.sidebar.button("📞 Contact", use_container_width=True):
-        st.session_state.page = "contact"
-        st.rerun()
-    
+
     user_data = users_col.find_one({"username": st.session_state.username})
 
     # ================= MAIN AREA (DRIVE) =================
@@ -667,7 +665,7 @@ else:
             <h3>Need Help? Get in Touch!</h3>
             <p>If you have any questions, feedback, or need assistance, feel free to reach out to us. We're here to help you make the most of your Memory Vault experience.</p>
             <ul>
-                <li><strong>Email:</strong> <a href="khalifa.miya.love@gmail.com">khalifa.miya.love@gmail.com</a></li>
+                <li><strong>Email:</strong> <a href="mailto:khalifa.miya.love@gmail.com">khalifa.miya.love@gmail.com</a></li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
