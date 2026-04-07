@@ -1,0 +1,5 @@
+streamlit
+pymongo
+cloudinary
+certifi
+plotly
