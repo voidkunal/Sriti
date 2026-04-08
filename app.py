@@ -9,6 +9,12 @@ import time
 import uuid  
 import plotly.express as px
 
+# --- NEW IMPORTS FOR FORGOT PASSWORD ---
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import random
+
 # ---------------- UI CONFIG ----------------
 st.set_page_config(page_title="Memory Vault Dashboard", page_icon="🌐", layout="wide")
 
@@ -226,6 +232,37 @@ def delete_folder_tree(folder_id):
     files_col.delete_many({"folder_id": folder_id})
     folders_col.delete_one({"_id": folder_id})
 
+# --- EMAIL SENDER FUNCTON ---
+def send_otp_email(receiver_email, otp):
+    try:
+        sender_email = st.secrets["SMTP_EMAIL"]
+        sender_password = st.secrets["SMTP_PASSWORD"] 
+        
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = receiver_email
+        msg['Subject'] = "Memory Vault - Password Reset OTP"
+        
+        body = f"""
+        Hello,
+        
+        You have requested to reset your password for Memory Vault.
+        Your 6-digit OTP is: {otp}
+        
+        If you did not request this, please ignore this email.
+        """
+        msg.attach(MIMEText(body, 'plain'))
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        st.error(f"Failed to send email: {e}")
+        return False
+
 # --- POPUP MODALS ---
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
@@ -275,7 +312,9 @@ defaults = {
     "current_folder": None,
     "page": "drive",
     "folder_key": 0,
-    "uploader_key": 0
+    "uploader_key": 0,
+    "reset_step": 0,      # For forgot password flow
+    "reset_email": ""     # For forgot password flow
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -307,7 +346,8 @@ def register(username, password, email):
         "password": hash_password(password),
         "profile_photo": "",
         "bio": "",
-        "session_token": "" 
+        "session_token": "",
+        "reset_otp": "" 
     })
     root = folders_col.insert_one({
         "username": username,
@@ -374,7 +414,8 @@ components.html(
 if not st.session_state.logged_in:
     st.title("📁 Private Memory Vault")
 
-    tab1, tab2 = st.tabs(["Login", "Sign Up"])
+    # ADDED: Third Tab for Forgot Password
+    tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Forgot Password"])
 
     with tab1:
         identifier = st.text_input("Username or Email", key="login_user")
@@ -409,6 +450,64 @@ if not st.session_state.logged_in:
                 st.rerun()
             else:
                 st.error("User exists")
+
+    # --- NEW: FORGOT PASSWORD FLOW ---
+    with tab3:
+        st.subheader("Recover Your Password")
+        
+        if st.session_state.reset_step == 0:
+            reset_email = st.text_input("Enter your registered Email", key="reset_email_input")
+            if st.button("Send Recovery OTP", type="primary"):
+                user = users_col.find_one({"email": reset_email})
+                if user:
+                    with st.spinner("Sending OTP securely via Google SMTP..."):
+                        otp = str(random.randint(100000, 999999))
+                        # Save OTP to database
+                        users_col.update_one({"email": reset_email}, {"$set": {"reset_otp": otp}})
+                        
+                        if send_otp_email(reset_email, otp):
+                            st.session_state.reset_step = 1
+                            st.session_state.reset_email = reset_email
+                            st.rerun()
+                        else:
+                            st.error("Could not send email. Please check Streamlit SMTP secrets.")
+                else:
+                    st.error("This email is not registered in our database.")
+                    
+        elif st.session_state.reset_step == 1:
+            st.success(f"An OTP was successfully sent to: **{st.session_state.reset_email}**")
+            entered_otp = st.text_input("Enter 6-Digit OTP", key="entered_otp")
+            new_pwd = st.text_input("Enter New Password", type="password", key="new_pwd")
+            confirm_pwd = st.text_input("Confirm New Password", type="password", key="confirm_pwd")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Verify & Reset Password", type="primary", use_container_width=True):
+                    if new_pwd != confirm_pwd:
+                        st.error("Passwords do not match!")
+                    elif len(new_pwd) < 4:
+                        st.error("Password is too short.")
+                    else:
+                        user = users_col.find_one({"email": st.session_state.reset_email})
+                        if user and user.get("reset_otp") == entered_otp:
+                            # Update to new password and clear the OTP
+                            users_col.update_one(
+                                {"email": st.session_state.reset_email}, 
+                                {"$set": {"password": hash_password(new_pwd), "reset_otp": ""}}
+                            )
+                            st.success("Password updated successfully! You can now log in.")
+                            time.sleep(2)
+                            # Reset states and refresh
+                            st.session_state.reset_step = 0
+                            st.session_state.reset_email = ""
+                            st.rerun()
+                        else:
+                            st.error("Invalid or Incorrect OTP!")
+            with col2:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state.reset_step = 0
+                    st.session_state.reset_email = ""
+                    st.rerun()
 
 # ================= DASHBOARD =================
 else:
