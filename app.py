@@ -14,7 +14,7 @@ import random
 import datetime
 
 # ---------------- UI CONFIG ----------------
-st.set_page_config(page_title="Voidmemo Dashboard", page_icon="🌐", layout="wide")
+st.set_page_config(page_title="voidememo Dashboard", page_icon="🌐", layout="wide")
 
 # ---------------- CONFIG (PRODUCTION SAFE) ----------------
 MONGO_URI = st.secrets["MONGO_URI"]
@@ -81,8 +81,7 @@ defaults = {
     "uploader_key": 0,
     "reset_step": 0,
     "reset_email": "",
-    "auth_view": "login",
-    "theme": "dark"  # Added theme toggle: "dark" or "light"
+    "auth_view": "login" 
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -118,311 +117,136 @@ def login(email, password):
         return user["username"]
     return False
 
-# ================= CSS: THEME SYSTEM (DARK & LIGHT) =================
-def inject_auth_css(view_state, theme="dark"):
-    if theme == "dark":
-        # Dark Mode: Warm Beige outer, Light Grey inner, Deep Graphite text
-        colors = {
-            "outer_bg": "#F5F5DC",          # Warm Beige outer background
-            "inner_box": "#F5F5DC",         # Warm Beige for form side
-            "text_primary": "#333333",      # Deep Graphite text
-            "text_secondary": "#666666",    # Medium gray text
-            "input_border": "#F24B8C",      # Light Rose Red border
-            "input_bg": "rgba(230, 230, 230, 0.8)",  # Light background
-            "purple": "#F24B8C",            # Light Rose Red button
-            "button_hover": "rgba(242, 75, 140, 0.2)"
-        }
-    else:
-        # Light Mode: Warm Beige outer, Warm Beige inner, Deep Graphite text
-        colors = {
-            "outer_bg": "#F5F5DC",          # Warm Beige outer background
-            "inner_box": "#F5F5DC",         # Warm Beige for form side
-            "text_primary": "#333333",      # Deep Graphite text
-            "text_secondary": "#666666",    # Medium gray text
-            "input_border": "#F24B8C",      # Light Rose Red border
-            "input_bg": "#ffffff",          # White background
-            "purple": "#F24B8C",            # Light Rose Red button
-            "button_hover": "#E0115F"       # Darker rose on hover
-        }
-
-    css = f"""
+# ================= CSS: PROFESSIONAL UI ALIGNMENT =================
+def inject_auth_css():
+    css = """
     <style>
-    /* 1. App Background - Warm Beige */
-    .stApp {{ background: #F5F5DC !important; }}
-    
-    /* 2. Container Centering - White Inner Box */
-    .block-container {{
-        max-width: 1100px !important;
-        width: 90% !important; 
-        padding: 0 !important;
-        margin: auto !important; 
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        border-radius: 20px;
-        background-color: #FFFFFF !important;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
-        overflow: hidden;
-        min-height: 600px;
-        border: none;
-        display: flex !important;
-    }}
-    
-    /* 3. Force 50/50 Split */
-    [data-testid="stHorizontalBlock"] {{ gap: 0 !important; margin: 0 !important; width: 100% !important; align-items: stretch !important; }}
-    
-    /* Left Column - Form Side (White Background) */
-    [data-testid="column"]:nth-of-type(1) {{
-        background: #FFFFFF !important;
-        padding: 80px 50px !important;
-        width: 50% !important;
-        flex: 1 1 50% !important;
-        display: flex; flex-direction: column; justify-content: center;
-        align-items: center;
-        text-align: center !important;
-        border-right: 2px solid #F5F5DC !important;
-    }}
-    
-    /* Right Column - Switch Side (White Background) */
-    [data-testid="column"]:nth-of-type(2) {{
-        background: #FFFFFF !important;
-        padding: 80px 50px !important;
-        width: 50% !important;
-        flex: 1 1 50% !important;
-        display: flex; flex-direction: column; justify-content: center;
-        align-items: center;
-        text-align: center !important;
-    }}
-    
-    /* All divs inside columns */
-    [data-testid="column"] > div {{
-        display: flex !important;
-        flex-direction: column !important;
-        justify-content: center !important;
-        align-items: center !important;
-        width: 100% !important;
-    }}
+    /* 1. Base App Background */
+    .stApp { background-color: #f4f2e6 !important; }
+    header { visibility: hidden; }
 
-    /* 4. Form Inputs */
-    .stTextInput > div > div > input, .stDateInput > div > div > input {{
-        background-color: {colors["input_bg"]} !important;
-        color: {colors["text_primary"]} !important; 
-        border: 2px solid {colors["input_border"]} !important;
-        border-radius: 12px !important;
-        padding: 14px 18px !important;
-        transition: all 0.3s ease !important;
-        font-size: 15px !important;
-    }}
-    
-    /* Left Column Input Styling - Rose Red borders on white background */
-    [data-testid="column"]:nth-of-type(1) .stTextInput > div > div > input,
-    [data-testid="column"]:nth-of-type(1) .stDateInput > div > div > input {{
-        background-color: #FFFFFF !important;
-        color: #333333 !important;
-        border: 2px solid #F24B8C !important;
-    }}
-    .stTextInput > div > div > input:focus {{ 
-        border-color: {colors["text_primary"]} !important; 
-        background-color: {colors["input_bg"]} !important;
-        box-shadow: 0 0 0 3px rgba(75, 144, 255, 0.3) !important; 
-        outline: none !important;
-    }}
-    .stTextInput > div > div > input::placeholder {{ color: {colors["text_secondary"]} !important; opacity: 0.7 !important; }}
-    
-    /* 5. Primary Button - Blue for left side */
-    button[kind="primary"] {{
-        background: #4B90FF !important; 
-        color: #FFFFFF !important;
-        border: none !important; 
-        border-radius: 12px !important;
-        font-weight: 600 !important; 
-        padding: 14px 20px !important; 
-        width: 100% !important;
-        margin-top: 20px !important;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        font-size: 15px !important;
-        cursor: pointer !important;
-        box-shadow: 0 4px 15px rgba(75, 144, 255, 0.4) !important;
-    }}
-    button[kind="primary"]:hover {{
-        transform: translateY(-4px) scale(1.02) !important;
-        box-shadow: 0 12px 35px rgba(75, 144, 255, 0.7) !important;
-    }}
-    button[kind="primary"]:active {{
-        transform: translateY(-1px) scale(0.99) !important;
-    }}
-    
-    /* 6. Secondary Outline Button - Dark on white background */
-    button[kind="secondary"] {{
-        background-color: transparent !important; 
-        color: #333333 !important;
-        border: 2px solid #333333 !important; 
-        border-radius: 12px !important;
-        font-weight: 600 !important; 
-        padding: 12px 18px !important; 
-        width: 100% !important;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        font-size: 14px !important;
-        cursor: pointer !important;
-    }}
-    button[kind="secondary"]:hover {{ 
-        background-color: #F5F5DC !important;
-        transform: translateY(-3px) !important;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1) !important;
-    }}
-    button[kind="secondary"]:active {{
-        transform: translateY(-1px) !important;
-    }}
-    
-    /* 7. Forgot Password Link */
-    button[kind="tertiary"] {{
-        color: {colors["text_primary"]} !important; 
-        background: transparent !important; 
-        border: none !important;
-        padding: 0 !important; 
-        font-size: 14px !important; 
-        font-weight: 500 !important;
-        display: flex; 
-        justify-content: flex-end; 
-        width: 100%; 
-        margin-top: -10px;
-        transition: all 0.2s ease !important;
-        cursor: pointer !important;
-    }}
-    button[kind="tertiary"]:hover {{
-        opacity: 0.8 !important;
-        text-decoration: underline !important;
-    }}
-    
-    /* Typography Global Overrides */
-    h1, h2, h3, h4, h5, h6 {{ font-weight: 700 !important; color: {colors["text_primary"]} !important; }}
-    p {{ color: {colors["text_secondary"]} !important; }}
-    label {{ color: {colors["text_primary"]} !important; }}
-    header {{ visibility: hidden; }}
-    
-    /* Left Column Text Styling - Dark text on white background */
-    [data-testid="column"]:nth-of-type(1) h1,
-    [data-testid="column"]:nth-of-type(1) h2,
-    [data-testid="column"]:nth-of-type(1) h3,
-    [data-testid="column"]:nth-of-type(1) h4,
-    [data-testid="column"]:nth-of-type(1) h5,
-    [data-testid="column"]:nth-of-type(1) h6 {{
-        color: #333333 !important;
-        text-align: center !important;
-    }}
-    [data-testid="column"]:nth-of-type(1) p {{
-        color: #666666 !important;
-        text-align: center !important;
-    }}
-    
-    /* Right Column Text Styling - Dark text on white background */
-    [data-testid="column"]:nth-of-type(2) h1,
-    [data-testid="column"]:nth-of-type(2) h2,
-    [data-testid="column"]:nth-of-type(2) h3,
-    [data-testid="column"]:nth-of-type(2) h4,
-    [data-testid="column"]:nth-of-type(2) h5,
-    [data-testid="column"]:nth-of-type(2) h6 {{
-        color: #333333 !important;
-        text-align: center !important;
-    }}
-    [data-testid="column"]:nth-of-type(2) p {{
-        color: #666666 !important;
-        text-align: center !important;
-    }}
-    /* Left Column Button Styling */
-    [data-testid="column"]:nth-of-type(1) button {{
-        width: 80% !important;
-        margin: 20px auto !important;
-        display: block !important;
-    }}
-    
-    /* Right Column Button Styling - White outline on white background */
-    [data-testid="column"]:nth-of-type(2) button[kind="secondary"] {{
-        background-color: transparent !important;
-        color: #333333 !important;
-        border: 2px solid #333333 !important;
-    }}
-    [data-testid="column"]:nth-of-type(2) button[kind="secondary"]:hover {{
-        background-color: #F5F5DC !important;
-    }}
-    [data-testid="column"]:nth-of-type(1) > div {{
-        display: flex !important;
-        flex-direction: column !important;
-        justify-content: center !important;
+    /* 2. The Unified White Card */
+    .block-container {
+        max-width: 850px !important;
+        background-color: #ffffff !important;
+        padding: 40px 60px !important;
+        border-radius: 20px !important;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.05) !important;
+        margin-top: 12vh !important;
+        margin-bottom: 10vh !important;
+    }
+
+    /* 3. Vertically Center Content Across Columns */
+    div[data-testid="stHorizontalBlock"] {
         align-items: center !important;
+    }
+
+    /* 4. Form Inputs Styling (Bulletproof) */
+    .stTextInput div[data-baseweb="input"], 
+    .stDateInput div[data-baseweb="input"] {
+        background-color: #e5e7eb !important;
+        border: 2px solid #e11d48 !important;
+        border-radius: 8px !important;
+        transition: all 0.2s ease;
+    }
+    .stTextInput input, .stDateInput input {
+        background-color: transparent !important;
+        color: #111111 !important;
+        padding: 12px 16px !important;
+        font-size: 15px !important;
+    }
+    ::placeholder { color: #6b7280 !important; opacity: 1 !important; }
+    
+    /* Input Focus State */
+    .stTextInput div[data-baseweb="input"]:focus-within,
+    .stDateInput div[data-baseweb="input"]:focus-within {
+        border-color: #4b90ff !important;
+        box-shadow: none !important;
+    }
+
+    /* Hide the password eye background block */
+    .stTextInput div[data-baseweb="input"] > div:last-child {
+        background: transparent !important;
+    }
+
+    /* 5. Buttons */
+    .stButton > button[kind="primary"] {
+        background-color: #4b90ff !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 12px 24px !important;
+        font-weight: 600 !important;
         width: 100% !important;
-        text-align: center !important;
-        gap: 15px !important;
-    }}
+        margin-top: 10px !important;
+    }
+    .stButton > button[kind="primary"]:hover { background-color: #3b82f6 !important; }
+
+    .stButton > button[kind="secondary"] {
+        background-color: transparent !important;
+        color: #111111 !important;
+        border: 1.5px solid #111111 !important;
+        border-radius: 8px !important;
+        padding: 10px 40px !important;
+        font-weight: 600 !important;
+        display: block !important;
+        margin: 0 auto !important; /* Perfectly centers the button */
+    }
+    .stButton > button[kind="secondary"]:hover { background-color: #f3f4f6 !important; }
+
+    .stButton > button[kind="tertiary"] {
+        color: #6b7280 !important;
+        background: transparent !important;
+        padding: 0 !important;
+        font-size: 13px !important;
+        display: flex !important;
+        justify-content: flex-end !important;
+        width: 100% !important;
+        margin-top: -5px !important;
+    }
+    .stButton > button[kind="tertiary"]:hover { color: #111111 !important; text-decoration: underline; }
+
+    /* 6. Typography Helper Classes */
+    .center-text { text-align: center; }
+    .title-text { color: #111; font-weight: 800; font-size: 28px; margin-bottom: 5px; }
+    .title-small { color: #111; font-weight: 700; font-size: 20px; margin-bottom: 8px; }
+    .sub-text { color: #6b7280; font-size: 14px; margin-bottom: 25px; }
+    .logo-text { color: #4b90ff; font-weight: 700; font-size: 18px; letter-spacing: 1px; margin-bottom: 20px; }
     
-    /* Remove Streamlit default styles */
-    [data-testid="stForm"] {{ padding: 0 !important; }}
-    [role="main"] {{ padding-top: 0 !important; }}
-    
-    /* Responsive Breakpoint */
-    @media (max-width: 768px) {{
-        [data-testid="stHorizontalBlock"] {{ flex-direction: column !important; }}
-        [data-testid="column"]:nth-of-type(1), [data-testid="column"]:nth-of-type(2) {{ 
-            width: 100% !important; 
-            flex: none !important; 
-            min-height: auto !important; 
-            padding: 60px 40px !important; 
-        }}
-        .block-container {{ 
-            position: relative; 
-            top: auto; 
-            left: auto; 
-            transform: none; 
-            margin: 5vh auto !important; 
-            height: auto;
-            border-radius: 20px;
-        }}
-    }}
+    /* 7. Responsive stacking for mobile */
+    @media (max-width: 768px) {
+        .block-container { padding: 30px 25px !important; margin-top: 5vh !important; }
+        div[data-testid="stHorizontalBlock"] { flex-direction: column !important; gap: 40px !important; }
+    }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
 
-# ================= THEME COLOR HELPER =================
-def get_theme_colors(theme="dark"):
-    """Returns color values based on theme"""
-    if theme == "dark":
-        return {
-            "text_primary": "#F5FBFF",      # Arctic Ice text
-            "text_secondary": "#e0e0e0",    # Light gray text
-            "logo_color": "#9ABDDC",        # Kawaii Sky Blue
-            "accent_color": "#9CB7BE",      # Cadet Blue
-        }
-    else:
-        return {
-            "text_primary": "#1a1a1a",      # Night black text
-            "text_secondary": "#666666",    # Dark gray text
-            "logo_color": "#9CB7BE",        # Cadet Blue
-            "accent_color": "#9ABDDC",      # Kawaii Sky Blue
-        }
-
-
-# ================= LANDING =================
+# ================= LANDING (EXACT LAYOUT) =================
 if not st.session_state.logged_in:
     
-    inject_auth_css(st.session_state.auth_view, st.session_state.theme)
+    inject_auth_css()
     
-    col_left, col_right = st.columns(2)
+    # Simple Columns: Let Streamlit handle the grid cleanly
+    col_left, col_right = st.columns(2, gap="large")
 
     # --- 1. LOGIN VIEW ---
     if st.session_state.auth_view == "login":
-        colors = get_theme_colors(st.session_state.theme)
         
-        with col_left: # FORM SIDE
-            st.markdown(f'<h2 style="font-weight: 700; text-align: center; margin-bottom: 10px; color: {colors["text_primary"]} !important; font-size: 32px;">Welcome Back</h2>', unsafe_allow_html=True)
-            st.markdown(f'<p style="color: #EB4C4C !important; font-size: 15px; text-align: center; margin-bottom: 35px;">Please enter your credentials to log in</p>', unsafe_allow_html=True)
+        with col_left: # Form Side
+            st.markdown('''
+            <div class="center-text">
+                <div class="logo-text">voidememo</div>
+                <div class="title-text">Welcome Back</div>
+                <div class="sub-text">Please enter your credentials to log in</div>
+            </div>
+            ''', unsafe_allow_html=True)
             
             email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="l_email")
             pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="l_pwd")
             
-            # Right-aligned Forgot Password
-            _, c_link = st.columns([2, 1.2])
+            _, c_link = st.columns([1.5, 1])
             with c_link:
                 if st.button("Forgot Password?", type="tertiary", use_container_width=True):
                     st.session_state.auth_view = "forgot"
@@ -443,37 +267,44 @@ if not st.session_state.logged_in:
                     else:
                         st.error("Invalid credentials")
 
-        with col_right: # SWITCH SIDE
-            st.markdown(f'<h3 style="font-weight: 500; text-align: center; margin-bottom: 10px; color: {colors["text_primary"]} !important; font-size: 20px;">New to our Platform?</h3>', unsafe_allow_html=True)
-            st.markdown(f'<p style="opacity: 0.9; text-align: center; font-size: 15px; margin-bottom: 30px; color: {colors["text_secondary"]} !important;">Create an account to build your vault.</p>', unsafe_allow_html=True)
+        with col_right: # Switch Side
+            st.markdown('''
+            <div class="center-text">
+                <div class="title-small">New to our Platform?</div>
+                <div class="sub-text">Create an account to build your vault.</div>
+            </div>
+            ''', unsafe_allow_html=True)
             
-            # Using columns to perfectly center the button in its dedicated area
-            _, btn_col, _ = st.columns([1, 1.5, 1])
-            with btn_col:
-                if st.button("SIGN UP", type="secondary", use_container_width=True):
-                    st.session_state.auth_view = "signup"
-                    st.rerun()
+            if st.button("SIGN UP", type="secondary"):
+                st.session_state.auth_view = "signup"
+                st.rerun()
 
 
     # --- 2. SIGN UP VIEW ---
     elif st.session_state.auth_view == "signup":
-        colors = get_theme_colors(st.session_state.theme)
         
-        with col_left: # SWITCH SIDE
-            st.markdown(f'<h3 style="font-weight: 500; text-align: center; margin-bottom: 10px; color: {colors["text_primary"]} !important; font-size: 20px;">Already have an account?</h3>', unsafe_allow_html=True)
-            st.markdown(f'<p style="opacity: 0.9; text-align: center; font-size: 15px; margin-bottom: 30px; color: {colors["text_secondary"]} !important;">Sign in to access your vault.</p>', unsafe_allow_html=True)
+        with col_left: # Switch Side
+            st.markdown('''
+            <div class="center-text">
+                <div class="title-small">Already have an account?</div>
+                <div class="sub-text">Sign in to access your vault.</div>
+            </div>
+            ''', unsafe_allow_html=True)
             
-            # Using columns to perfectly center the buttons
-            _, btn_col, _ = st.columns([1, 1.5, 1])
-            with btn_col:
-                if st.button("SIGN IN", type="secondary", use_container_width=True):
-                    st.session_state.auth_view = "login"
-                    st.rerun()
+            if st.button("SIGN IN", type="secondary"):
+                st.session_state.auth_view = "login"
+                st.rerun()
 
-        with col_right: # FORM SIDE
-            st.markdown(f'<h2 style="font-weight: 700; text-align: center; margin-bottom: 10px; color: {colors["text_primary"]} !important; font-size: 32px;">Sign Up</h2>', unsafe_allow_html=True)
-            st.markdown(f'<p style="color: {colors["text_secondary"]} !important; font-size: 15px; text-align: center; margin-bottom: 35px;">Please provide your information to sign up.</p>', unsafe_allow_html=True)
+        with col_right: # Form Side
+            st.markdown('''
+            <div class="center-text">
+                <div class="logo-text">voidememo</div>
+                <div class="title-text">Sign Up</div>
+                <div class="sub-text">Please provide your information to sign up.</div>
+            </div>
+            ''', unsafe_allow_html=True)
             
+            # Using nested columns safely (won't break since we removed destructive CSS)
             c_fn, c_ln = st.columns(2)
             with c_fn: fname = st.text_input("First Name", placeholder="First Name", label_visibility="collapsed", key="s_fname")
             with c_ln: lname = st.text_input("Last Name", placeholder="Last Name", label_visibility="collapsed", key="s_lname")
@@ -500,25 +331,17 @@ if not st.session_state.logged_in:
 
     # --- 3. FORGOT PASSWORD VIEW ---
     elif st.session_state.auth_view == "forgot":
-        colors = get_theme_colors(st.session_state.theme)
         
-        with col_left: # SWITCH SIDE
-
-            st.markdown(f'<h3 style="font-weight: 500; font-style: italic; text-align: center; line-height: 1.5; margin-bottom: 30px; color: {colors["text_primary"]} !important; font-size: 18px;">"Your own digital<br>bibliothecas for<br>borrowing and<br>watching videos"</h3>', unsafe_allow_html=True)
-            
-            # Using columns to perfectly center the back button
-            _, btn_col, _ = st.columns([1, 1.5, 1])
-            with btn_col:
-                if st.button("⬅ Back to Log In", type="secondary", use_container_width=True):
-                    st.session_state.reset_step = 0
-                    st.session_state.auth_view = "login"
-                    st.rerun()
-
-        with col_right: # FORM SIDE
-            st.markdown(f'<h2 style="font-weight: 700; text-align: center; margin-bottom: 10px; color: {colors["text_primary"]} !important; font-size: 32px;">Forgot Password</h2>', unsafe_allow_html=True)
+        with col_left: # Form Side
+            st.markdown('''
+            <div class="center-text">
+                <div class="logo-text">voidememo</div>
+                <div class="title-text">Forgot Password</div>
+            </div>
+            ''', unsafe_allow_html=True)
             
             if st.session_state.reset_step == 0:
-                st.markdown(f'<p style="color: {colors["text_secondary"]} !important; font-size: 15px; text-align: center; margin-bottom: 35px;">Please enter your registered email</p>', unsafe_allow_html=True)
+                st.markdown('<div class="center-text sub-text">Please enter your registered email</div>', unsafe_allow_html=True)
                 f_email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="f_email")
                 
                 if st.button("RESET PASSWORD", type="primary", use_container_width=True):
@@ -538,7 +361,7 @@ if not st.session_state.logged_in:
                             st.error("No account found with that email.")
                             
             elif st.session_state.reset_step == 1:
-                st.markdown(f'<p style="color: {colors["text_secondary"]} !important; font-size: 15px; text-align: center; margin-bottom: 35px;">Enter the 6-digit code sent to your email</p>', unsafe_allow_html=True)
+                st.markdown('<div class="center-text sub-text">Enter the 6-digit code sent to your email</div>', unsafe_allow_html=True)
                 st.success(f"OTP sent to {st.session_state.reset_email}")
                 entered_otp = st.text_input("Enter 6-Digit OTP", placeholder="123456", label_visibility="collapsed", key="entered_otp")
                 new_pwd = st.text_input("Enter New Password", type="password", placeholder="New Password", label_visibility="collapsed", key="new_pwd")
@@ -562,8 +385,22 @@ if not st.session_state.logged_in:
                         else:
                             st.error("Invalid token!")
 
+        with col_right: # Switch Side
+            st.markdown('''
+            <div class="center-text">
+                <div class="title-small" style="margin-top: 20px;">Remembered your password?</div>
+                <div class="sub-text">Head back to access your vault.</div>
+            </div>
+            ''', unsafe_allow_html=True)
+            
+            if st.button("LOG IN", type="secondary"):
+                st.session_state.reset_step = 0
+                st.session_state.auth_view = "login"
+                st.rerun()
+
 
 # ================= DASHBOARD (LIQUID GLASS) =================
+# ... (Dashboard logic remains unchanged below) ...
 else:
     # --- DASHBOARD HEADER ---
     components.html(
