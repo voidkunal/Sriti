@@ -636,27 +636,72 @@ else:
 
                     st.write("<br>", unsafe_allow_html=True) 
 
+        # # Upload & File Logic
+        # if not is_root:
+        #     with st.expander("☁️ Upload Files", expanded=True):
+        #         uploaded_files = st.file_uploader("Drag and drop files here", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
+
+        #         if uploaded_files:
+        #             with st.spinner("Uploading to secure vault..."):
+        #                 for file in uploaded_files:
+        #                     r_type = "video" if file.type.startswith("video") else "image"
+        #                     res = cloudinary.uploader.upload(file, resource_type=r_type)
+
+        #                     files_col.insert_one({
+        #                         "username": st.session_state.username,
+        #                         "folder_id": st.session_state.current_folder,
+        #                         "filename": file.name,
+        #                         "url": res["secure_url"],
+        #                         "public_id": res["public_id"],
+        #                         "resource_type": r_type,
+        #                         "tag": "",
+        #                         "tag_time": 0 
+        #                     })
+                    
+        #             st.session_state.uploader_key += 1 
+        #             st.success("Files successfully uploaded!")
+        #             time.sleep(1) 
+        #             st.rerun()
+        
+        
         # Upload & File Logic
         if not is_root:
             with st.expander("☁️ Upload Files", expanded=True):
-                uploaded_files = st.file_uploader("Drag and drop files here", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
+                # We added a note to the UI so users know large files take time
+                uploaded_files = st.file_uploader("Drag and drop files here (Max 1GB)", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
 
                 if uploaded_files:
-                    with st.spinner("Uploading to secure vault..."):
+                    with st.spinner("Uploading to secure vault (large files may take a few minutes)..."):
                         for file in uploaded_files:
                             r_type = "video" if file.type.startswith("video") else "image"
-                            res = cloudinary.uploader.upload(file, resource_type=r_type)
+                            
+                            # Determine file size in MB
+                            file_size_mb = file.size / (1024 * 1024)
+                            
+                            try:
+                                # Use chunked uploads for anything over 50MB to be safe
+                                if file_size_mb > 50:
+                                    res = cloudinary.uploader.upload_large(
+                                        file, 
+                                        resource_type=r_type,
+                                        chunk_size=20000000  # Uploads in 20MB chunks
+                                    )
+                                else:
+                                    # Standard upload for smaller files
+                                    res = cloudinary.uploader.upload(file, resource_type=r_type)
 
-                            files_col.insert_one({
-                                "username": st.session_state.username,
-                                "folder_id": st.session_state.current_folder,
-                                "filename": file.name,
-                                "url": res["secure_url"],
-                                "public_id": res["public_id"],
-                                "resource_type": r_type,
-                                "tag": "",
-                                "tag_time": 0 
-                            })
+                                files_col.insert_one({
+                                    "username": st.session_state.username,
+                                    "folder_id": st.session_state.current_folder,
+                                    "filename": file.name,
+                                    "url": res["secure_url"],
+                                    "public_id": res["public_id"],
+                                    "resource_type": r_type,
+                                    "tag": "",
+                                    "tag_time": 0 
+                                })
+                            except Exception as e:
+                                st.error(f"Failed to upload {file.name}. Error: {e}")
                     
                     st.session_state.uploader_key += 1 
                     st.success("Files successfully uploaded!")
