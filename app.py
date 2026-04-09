@@ -169,26 +169,38 @@ def render_notif_hub_dialog():
         if "notif_hub" in st.query_params: del st.query_params["notif_hub"]
         st.rerun()
 
+# --- SMART SHARE ENGINE (Handles both Single Files and Folder Batches securely) ---
 @st.dialog("🔗 Share Media", width="large")
-def share_media_dialog(current_folder_id_str):
+def share_media_dialog(target_id_str, mode):
     curr_user = users_col.find_one({"username": st.session_state.username})
     user_pin = curr_user.get("pin_code", "")
     
-    cf_id = None if current_folder_id_str == "root" else ObjectId(current_folder_id_str)
-    folder_files = list(files_col.find({"username": st.session_state.username, "folder_id": cf_id}))
+    selected_media_ids = []
     
-    if not folder_files:
-        st.info("No media files found to share.")
-        if st.button("Cancel"): del st.query_params["share_media"]; st.rerun()
-        return
+    if mode == "folder":
+        cf_id = None if target_id_str == "root" else ObjectId(target_id_str)
+        folder_files = list(files_col.find({"username": st.session_state.username, "folder_id": cf_id}))
+        
+        if not folder_files:
+            st.info("No media files found to share in this folder.")
+            if st.button("Close"): 
+                if "share_folder" in st.query_params: del st.query_params["share_folder"]
+                st.rerun()
+            return
 
-    st.markdown("### 1. Select Media Batch")
-    media_options = {html.escape(f['filename']) if f.get('filename') else str(f['_id']): f['_id'] for f in folder_files}
-    selected_media_filenames = st.multiselect("Select files to include in the batch share", list(media_options.keys()), key="multiselect_media")
-    selected_media_ids = [media_options[name] for name in selected_media_filenames]
+        st.markdown("### 1. Select Media Batch")
+        media_options = {html.escape(f['filename']) if f.get('filename') else str(f['_id']): f['_id'] for f in folder_files}
+        selected_media_filenames = st.multiselect("Select files to include in the batch share", list(media_options.keys()), default=list(media_options.keys()), key="ms_media")
+        selected_media_ids = [media_options[name] for name in selected_media_filenames]
+    else:
+        selected_media_ids = [ObjectId(target_id_str)]
+        st.markdown("### 1. Share File")
+        file_doc = files_col.find_one({"_id": selected_media_ids[0]})
+        if file_doc:
+            st.write(f"Sharing: **{html.escape(file_doc.get('filename', 'Media Item'))}**")
     
     st.markdown("### 2. Discover Users")
-    st.markdown("Select users to securely share this memory batch with.")
+    st.markdown("Select users to securely share this memory with.")
     tab_n, tab_s = st.tabs(["📍 Nearby Users", "🔍 Search Global"])
     
     selected_users = []
@@ -214,7 +226,7 @@ def share_media_dialog(current_folder_id_str):
     
     st.write("<br>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
-    if c1.button(f"Send {len(selected_media_ids)} memory batch to {len(final_selection)} users", type="primary", disabled=len(final_selection)==0 or len(selected_media_ids)==0, use_container_width=True):
+    if c1.button(f"Send {len(selected_media_ids)} items to {len(final_selection)} users", type="primary", disabled=len(final_selection)==0 or len(selected_media_ids)==0, use_container_width=True):
         for u in final_selection:
             existing = shares_col.find_one({"sender": st.session_state.username, "receiver": u, "media_ids": selected_media_ids})
             if existing: continue
@@ -224,21 +236,25 @@ def share_media_dialog(current_folder_id_str):
                 "media_ids": selected_media_ids, "count": len(selected_media_ids), 
                 "created_at": time.time(), "is_seen": False
             })
+            
+            msg_text = f"shared a memory with you." if mode == "file" else f"shared a {len(selected_media_ids)} memory batch with you."
             notifications_col.insert_one({
-                "username": u, "sender": st.session_state.username, "type": "share_batch", "share_id": share_res.inserted_id,
-                "message": f"shared a {len(selected_media_ids)} memory batch with you.", "is_read": False, "created_at": time.time()
+                "username": u, "sender": st.session_state.username, "type": "share", "share_id": share_res.inserted_id,
+                "message": msg_text, "is_read": False, "created_at": time.time()
             })
             
         st.success("Shared successfully!")
         time.sleep(1)
-        del st.query_params["share_media"]
+        if "share_folder" in st.query_params: del st.query_params["share_folder"]
+        if "share_file" in st.query_params: del st.query_params["share_file"]
         st.rerun()
         
     if c2.button("Cancel", use_container_width=True):
-        del st.query_params["share_media"]
+        if "share_folder" in st.query_params: del st.query_params["share_folder"]
+        if "share_file" in st.query_params: del st.query_params["share_file"]
         st.rerun()
 
-@st.dialog("📬 Shared Media Preview (Batch)", width="large")
+@st.dialog("📬 Shared Media Preview", width="large")
 def preview_shared_dialog(notif_id_str):
     notif = notifications_col.find_one({"_id": ObjectId(notif_id_str)})
     if not notif:
@@ -269,20 +285,23 @@ def preview_shared_dialog(notif_id_str):
         with preview_cols[p_idx % 4]:
             st.markdown('<div class="media-container-wrapper">', unsafe_allow_html=True)
             if p_file["resource_type"] == "image":
-                st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>', unsafe_allow_html=True)
+                img_html = f'<div class="square-media"><img src="{safe_preview_url}"></div>'
+                st.markdown(img_html.replace('\n', ''), unsafe_allow_html=True)
             else:
                 vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>', unsafe_allow_html=True)
+                vid_html = f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'
+                st.markdown(vid_html.replace('\n', ''), unsafe_allow_html=True)
             
             with st.popover("⋮"):
-                st.markdown(f'<a href="{safe_preview_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
+                btn_html = f'<a href="{safe_preview_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>'
+                st.markdown(btn_html.replace('\n', ''), unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
     
     st.write("<br><br>", unsafe_allow_html=True)
     st.markdown("<hr style='border-color: rgba(255,255,255,0.2);'>", unsafe_allow_html=True)
     
     c1, c2 = st.columns(2)
-    if c1.button(f"📥 Save {share['count']} memory copies to Album", type="primary", use_container_width=True):
+    if c1.button(f"📥 Save {share['count']} items to Album", type="primary", use_container_width=True):
         root = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
         root_id = root["_id"] if root else None
         
@@ -320,52 +339,6 @@ def preview_shared_dialog(notif_id_str):
         notifications_col.update_one({"_id": ObjectId(notif_id_str)}, {"$set": {"is_read": True}})
         del st.query_params["preview_notif"]
         st.rerun()
-
-@st.dialog("✨ Memory Highlight")
-def render_story_dialog(group_idx, idx):
-    groups = st.session_state.get("story_groups", [])
-    if not groups or group_idx >= len(groups) or idx >= len(groups[group_idx]["items"]):
-        if "story_group" in st.query_params: del st.query_params["story_group"]
-        if "story_idx" in st.query_params: del st.query_params["story_idx"]
-        st.rerun()
-        
-    current_group = groups[group_idx]
-    current_story = current_group["items"][idx]
-    safe_label = html.escape(current_group['label'])
-    safe_url = html.escape(current_story["url"])
-    
-    st.markdown("""
-    <style>
-    div[data-testid="stDialog"] > div {
-        background: rgba(40, 40, 40, 0.4) !important; backdrop-filter: blur(25px) !important; -webkit-backdrop-filter: blur(25px) !important;
-        border: 1px solid rgba(255, 255, 255, 0.2) !important; border-radius: 24px !important; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
-        padding: 10px 20px 20px 20px !important; max-width: 500px !important; margin: auto;
-    }
-    div[data-testid="stModal"] > div { background-color: rgba(0, 0, 0, 0.7) !important; }
-    button[aria-label="Close"] { display: none !important; } 
-    .story-progress-bar { width: 100%; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; margin-bottom: 15px; overflow: hidden; }
-    .story-progress-fill { height: 100%; background: #ffffff; width: 0%; animation: progress-fill 15s linear forwards; box-shadow: 0 0 10px rgba(255,255,255,0.8);}
-    @keyframes progress-fill { to { width: 100%; } }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    st.markdown(f"<h4 style='text-align: center; margin-top: -5px; color: white !important; font-weight: 600; text-shadow: 0 2px 4px rgba(0,0,0,0.5);'>{safe_label}</h4>", unsafe_allow_html=True)
-    st.markdown('<div class="story-progress-bar"><div class="story-progress-fill"></div></div>', unsafe_allow_html=True)
-    
-    if current_story["resource_type"] == "image":
-        st.markdown(f'<div style="display:flex; justify-content:center;"><img src="{safe_url}" style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);"></div>', unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div style="display:flex; justify-content:center;"><video src="{safe_url}" autoplay muted playsinline style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);"></video></div>', unsafe_allow_html=True)
-        
-    next_idx = idx + 1
-    next_group_idx = group_idx + 1
-    session_token = html.escape(st.query_params.get('session', ''))
-    
-    if next_idx < len(current_group["items"]): next_search = f"?page=app&tab=drive&folder=root&story_group={group_idx}&story_idx={next_idx}&session={session_token}"
-    elif next_group_idx < len(groups): next_search = f"?page=app&tab=drive&folder=root&story_group={next_group_idx}&story_idx=0&session={session_token}"
-    else: next_search = f"?page=app&tab=drive&folder=root&session={session_token}"
-        
-    components.html(f'<script>if (window.top.storyTimeout) {{ clearTimeout(window.top.storyTimeout); window.top.storyTimeout = null; }} window.top.storyTimeout = setTimeout(function() {{ window.top.location.search = "{next_search}"; }}, 15000);</script>', height=0)
 
 
 # ================= NATIVE GESTURE ROUTING SYSTEM =================
@@ -439,7 +412,7 @@ if st.session_state.logged_in:
     random.seed() 
 
 
-# ================= CORE CSS & RESPONSIVENESS FIXES =================
+# ================= CORE CSS =================
 def inject_global_css():
     css = """
     <style>
@@ -457,10 +430,14 @@ def inject_global_css():
     p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
     
     /* ABSOLUTE MOBILE TOUCH OVERRIDE: Destroy Streamlit's invisible shields */
-    header[data-testid="stHeader"], div[data-testid="stToolbar"], div[data-testid="stDecoration"] { 
-        display: none !important; opacity: 0 !important; pointer-events: none !important; height: 0 !important; 
-    }
+    header[data-testid="stHeader"] { display: none !important; opacity: 0 !important; pointer-events: none !important; height: 0 !important; }
+    div[data-testid="stToolbar"] { display: none !important; pointer-events: none !important; }
+    div[data-testid="stDecoration"] { display: none !important; pointer-events: none !important; }
     #MainMenu { visibility: hidden; } .stDeployButton { display: none !important; }
+    
+    /* Ensure content is always interactable */
+    div[data-testid="stAppViewBlockContainer"] { z-index: 10 !important; padding-top: 1rem !important; }
+    div[data-testid="stMarkdownContainer"] { position: relative; z-index: 50; pointer-events: auto !important; }
 
     .title-text { color: var(--text-primary) !important; font-weight: 800; font-size: 32px; text-align: center; margin-bottom: 5px; }
     .sub-text { color: var(--text-secondary) !important; font-size: 15px; text-align: center; margin-bottom: 30px; }
@@ -470,7 +447,7 @@ def inject_global_css():
     .auth-container, .content-card {
         max-width: 480px !important; width: 90% !important; background-color: var(--bg-card) !important;
         padding: 50px 40px !important; border-radius: 20px !important; border: 1px solid var(--border) !important; margin: 8vh auto !important; 
-        position: relative; z-index: 10;
+        position: relative; z-index: 9999999 !important; pointer-events: auto !important;
     }
     .content-card { max-width: 800px !important; }
     .stTextInput div[data-baseweb="input"], .stDateInput div[data-baseweb="input"], .stTextArea div[data-baseweb="textarea"] {
@@ -487,13 +464,10 @@ def inject_global_css():
     }
     .native-link { color: var(--accent) !important; text-decoration: none; font-weight: 600; cursor: pointer;} .native-link:hover { text-decoration: underline; }
     
-    /* NAV & HEADER CLEANUP */
-    .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; border-bottom: 1px solid var(--border); margin-bottom: 30px; }
-    .nav-links { display: flex; gap: 20px; align-items: center; }
-    .nav-links a { color: var(--text-primary) !important; text-decoration: none; font-weight: 600; font-size: 16px; cursor: pointer; }
+    .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 9999999 !important; pointer-events: auto !important; }
+    .nav-links { display: flex; gap: 20px; align-items: center; position: relative; z-index: 9999999 !important; pointer-events: auto !important; }
+    .nav-links a { color: var(--text-primary) !important; text-decoration: none; font-weight: 500; font-size: 15px; position: relative; z-index: 9999999 !important; pointer-events: auto !important; cursor: pointer; }
     .nav-links a:hover { color: var(--accent) !important; }
-    .btn-primary-link { background: var(--accent); color: #ffffff !important; padding: 10px 24px; border-radius: 50px; text-decoration: none; font-weight: 600; }
-    .btn-primary-link:hover { opacity: 0.9; }
 
     .sidebar-link {
         display: flex; align-items: center; gap: 10px; background: transparent; color: var(--text-primary) !important;
@@ -505,15 +479,6 @@ def inject_global_css():
     .dashboard-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;}
     .dashboard-title { font-size: 32px; font-weight: 800; color: var(--text-primary); }
     
-    /* PROFESSIONAL MASONRY GALLERY */
-    .masonry-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; padding: 10px 0 40px 0; }
-    .gallery-item { position: relative; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); background: #000; aspect-ratio: 4/5; }
-    .gallery-item img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.4s ease; opacity: 0.9; }
-    .gallery-item:hover img { transform: scale(1.08); opacity: 1; }
-    .gallery-overlay { position: absolute; bottom: 0; left: 0; width: 100%; background: linear-gradient(transparent, rgba(0,0,0,0.8)); padding: 20px 15px 15px 15px; pointer-events: none; }
-    .gallery-title { color: white; font-size: 15px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
-    .gallery-date { color: #e5e5ea; font-size: 12px; font-weight: 500; }
-
     .story-wrapper { display: flex; overflow-x: auto; gap: 15px; padding: 10px 0 20px 0; margin-bottom: 10px; }
     .story-wrapper::-webkit-scrollbar { display: none; }
     .story-link { text-decoration: none; display: inline-block; }
@@ -575,22 +540,29 @@ def inject_global_css():
         background: var(--bg-app); padding: 15px; text-align: center; 
         border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; pointer-events: auto;
     }
+    
+    .masonry-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; padding: 10px 0 40px 0; }
+    .gallery-item { position: relative; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); background: #000; aspect-ratio: 4/5; }
+    .gallery-item img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.4s ease; opacity: 0.9; }
+    .gallery-item:hover img { transform: scale(1.08); opacity: 1; }
+    .gallery-overlay { position: absolute; bottom: 0; left: 0; width: 100%; background: linear-gradient(transparent, rgba(0,0,0,0.8)); padding: 20px 15px 15px 15px; pointer-events: none; }
+    .gallery-title { color: white; font-size: 15px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+    .gallery-date { color: #e5e5ea; font-size: 12px; font-weight: 500; }
 
     /* MASSIVE MOBILE TOUCH OVERHAUL */
     @media (max-width: 768px) {
-        .auth-container, .content-card { border: none !important; border-radius: 0 !important; padding: 30px 20px !important; margin: 0 !important; width: 100% !important; max-width: 100% !important;}
-        .top-nav { flex-direction: column; gap: 20px; padding: 20px 0; border-bottom: none; margin-bottom: 10px;}
-        .nav-links { width: 100%; justify-content: space-around; flex-wrap: wrap; gap: 15px;}
-        .nav-links a { font-size: 14px; background: var(--bg-card); padding: 10px 15px; border-radius: 8px; flex: 1; text-align: center; border: 1px solid var(--border); }
-        .btn-primary-link { border: none !important; }
-        .brand-logo { font-size: 32px; }
+        .auth-container, .content-card { border: none !important; border-radius: 0 !important; padding: 30px 20px !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; pointer-events: auto !important;}
+        .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; z-index: 9999999 !important; pointer-events: auto !important;}
+        .nav-links { gap: 15px; flex-wrap: wrap; justify-content: center; width: 100%; z-index: 9999999 !important; pointer-events: auto !important;}
+        .nav-links a { font-size: 16px; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; flex: 1; min-width: 80px; font-weight: 600; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .brand-logo { font-size: 28px; margin-bottom: 10px;}
         .masonry-gallery { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 5px; }
         .gallery-title { font-size: 13px; }
         .block-container { padding-top: 1rem !important; } 
     }
     </style>
     """
-    st.markdown(css, unsafe_allow_html=True)
+    st.markdown(css.replace('\n', ''), unsafe_allow_html=True)
 
 
 # ================= CATCH POPUPS, DIALOGS, & TRUE FULL-SCREEN LIGHTBOX =================
@@ -598,9 +570,13 @@ if "notif_hub" in st.query_params and st.session_state.logged_in:
     inject_global_css()
     render_notif_hub_dialog()
 
-if "share_media" in st.query_params and st.session_state.logged_in:
+if "share_folder" in st.query_params and st.session_state.logged_in:
     inject_global_css()
-    share_media_dialog(st.query_params["share_media"])
+    share_media_dialog(st.query_params["share_folder"], mode="folder")
+
+if "share_file" in st.query_params and st.session_state.logged_in:
+    inject_global_css()
+    share_media_dialog(st.query_params["share_file"], mode="file")
 
 if "preview_notif" in st.query_params and st.session_state.logged_in:
     inject_global_css()
@@ -637,21 +613,8 @@ if "lightbox_idx" in st.query_params and st.session_state.logged_in:
     prev_button = f"<a href='{prev_search}' target='_parent' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_parent' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # Flattened UI String protects against markdown parser bleed
-    lightbox_ui = f"""
-<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 9999999; display: flex; align-items: center; justify-content: center;">
-<style>
-.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); transition: all 0.3s ease; cursor: pointer; z-index: 10000000; }}
-.liquid-btn:hover {{ background: rgba(255, 255, 255, 0.3); transform: scale(1.1); box-shadow: 0 8px 32px rgba(255, 255, 255, 0.2); color: white; }}
-</style>
-<a href="{close_search}" target="_parent" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>
-{prev_button}
-{next_button}
-<div style="position: absolute; bottom: 30px; color: white; font-family: sans-serif; font-size: 15px; font-weight: 600; background: rgba(255,255,255,0.15); padding: 8px 24px; border-radius: 30px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); letter-spacing: 1px; z-index: 10000000;">{idx + 1} / {len(files)}</div>
-{media_element}
-</div>
-"""
-    st.markdown(lightbox_ui.strip(), unsafe_allow_html=True)
+    lightbox_ui = f"""<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); transition: all 0.3s ease; cursor: pointer; z-index: 10000000; }} .liquid-btn:hover {{ background: rgba(255, 255, 255, 0.3); transform: scale(1.1); box-shadow: 0 8px 32px rgba(255, 255, 255, 0.2); color: white; }}</style><a href="{close_search}" target="_parent" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>{prev_button}{next_button}<div style="position: absolute; bottom: 30px; color: white; font-family: sans-serif; font-size: 15px; font-weight: 600; background: rgba(255,255,255,0.15); padding: 8px 24px; border-radius: 30px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); letter-spacing: 1px; z-index: 10000000;">{idx + 1} / {len(files)}</div>{media_element}</div>"""
+    st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
 
     components.html(f"""
     <script>
@@ -687,23 +650,16 @@ if not st.session_state.logged_in:
         st.rerun()
     
     if app_page != "auth":
-        st.markdown(f"""
-        <div class="top-nav">
-            <a href="{get_nav_link('landing')}" target="_self" class="brand-logo">voidememo</a>
-            <div class="nav-links">
-                <a href="{get_nav_link('landing')}" target="_self">Home</a>
-                <a href="{get_nav_link('policy')}" target="_self">Policy</a>
-                <a href="{get_nav_link('auth', 'login')}" target="_self">Log In</a>
-                <a href="{get_nav_link('auth', 'signup')}" target="_self" class="btn-primary-link">Create Vault</a>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        nav_html = f"""<div class="top-nav"><a href="{get_nav_link('landing')}" target="_self" class="brand-logo">voidememo</a><div class="nav-links"><a href="{get_nav_link('landing')}" target="_self">Home</a><a href="{get_nav_link('policy')}" target="_self">Policy</a><a href="{get_nav_link('auth', 'login')}" target="_self" style="color: var(--accent) !important; font-weight: 700;">Log In</a></div></div>"""
+        st.markdown(nav_html.replace('\n', ''), unsafe_allow_html=True)
 
         if app_page == "landing":
-            st.markdown('<div class="title-text" style="font-size: 3.5rem; margin-top: 2rem;">Secure Your Memories</div>', unsafe_allow_html=True)
-            st.markdown('<div class="sub-text" style="font-size: 1.25rem; max-width: 600px; margin: 0 auto 2rem auto;">Your personal digital bibliotheca. Access, organize, and protect your media with absolute privacy.</div>', unsafe_allow_html=True)
-            st.markdown(f'<div style="text-align: center; margin-bottom: 40px;"><a href="{get_nav_link("auth", "signup")}" target="_self" class="btn-primary-link" style="font-size: 18px; padding: 15px 40px;">Create Free Vault</a></div>', unsafe_allow_html=True)
-            st.write("<h3 style='text-align: center; margin-bottom: 20px;'>Community Vault Gallery</h3>", unsafe_allow_html=True)
+            st.markdown('<div class="title-text" style="font-size: 3.5rem; margin-top: 4rem;">Secure Your Memories</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sub-text" style="font-size: 1.25rem; max-width: 600px; margin: 0 auto 3rem auto;">Your personal digital bibliotheca. Access, organize, and protect your media with absolute privacy.</div>', unsafe_allow_html=True)
+            
+            btn_html = f'<div style="text-align: center; position: relative; z-index: 9999999 !important; pointer-events: auto !important;"><a href="{get_nav_link("auth", "signup")}" target="_self" style="background: var(--accent); color: #ffffff; padding: 14px 30px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 16px; display: inline-block;">Create Free Vault</a></div>'
+            st.markdown(btn_html.replace('\n', ''), unsafe_allow_html=True)
+            st.write("<br><br><br><h3 style='text-align: center; margin-bottom: 30px;'>Community Vault Gallery</h3>", unsafe_allow_html=True)
             
             pipeline = [
                 {"$match": {"resource_type": "image"}},
@@ -720,39 +676,23 @@ if not st.session_state.logged_in:
                 "https://images.unsplash.com/photo-1510784722466-f2aa9c52fff6?auto=format&fit=crop&w=600&q=80",
                 "https://images.unsplash.com/photo-1444464666168-49b6264240ce?auto=format&fit=crop&w=600&q=80",
                 "https://images.unsplash.com/photo-1532274402911-5a369e4c4bb5?auto=format&fit=crop&w=600&q=80",
-                "https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=600&q=80",
-                "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=600&q=80",
-                "https://images.unsplash.com/photo-1475924156734-6b1e0984161c?auto=format&fit=crop&w=600&q=80",
-                "https://images.unsplash.com/photo-1433086966358-54859d0ed716?auto=format&fit=crop&w=600&q=80",
-                "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=600&q=80",
-                "https://images.unsplash.com/photo-1454496522488-7a8e488e8606?auto=format&fit=crop&w=600&q=80",
-                "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=600&q=80"
+                "https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=600&q=80"
             ]
             
             urls_to_show = [img["url"] for img in community_images]
-            while len(urls_to_show) < 20:
-                urls_to_show.append(random.choice(fallback_urls))
+            while len(urls_to_show) < 20: urls_to_show.append(random.choice(fallback_urls))
                 
-            # TRUE CSS MASONRY GRID - NO ST.COLUMNS MESS
             gallery_html = '<div class="masonry-gallery">'
             for url in urls_to_show:
                 random_date = f"202{random.randint(3,6)} Memory"
                 safe_url = html.escape(url)
-                gallery_html += f'''
-<div class="gallery-item">
-<img src="{safe_url}" loading="lazy">
-<div class="gallery-overlay">
-<div class="gallery-title">Community Vault ✨</div>
-<div class="gallery-date">{random_date}</div>
-</div>
-</div>
-'''
+                gallery_html += f'<div class="gallery-item"><img src="{safe_url}" loading="lazy"><div class="gallery-overlay"><div class="gallery-title">Community Vault ✨</div><div class="gallery-date">{random_date}</div></div></div>'
             gallery_html += '</div>'
-            st.markdown(gallery_html.strip(), unsafe_allow_html=True)
+            st.markdown(gallery_html.replace('\n', ''), unsafe_allow_html=True)
             
         elif app_page == "policy":
             st.markdown("""
-            <div class="content-card">
+            <div class="content-card" style="position: relative; z-index: 10; pointer-events: auto;">
                 <h2>Privacy Policy & Permissions</h2>
                 <p class="muted-text">Last Updated: April 2026</p>
                 <hr style='border-color: var(--border);'>
@@ -767,7 +707,7 @@ if not st.session_state.logged_in:
             
         elif app_page == "contact":
             st.markdown("""
-            <div class="content-card" style="text-align: center;">
+            <div class="content-card" style="text-align: center; position: relative; z-index: 10; pointer-events: auto;">
                 <h2>Contact Support</h2>
                 <p>Have questions about your vault or our privacy policies? We are here to help.</p><br>
                 <h4>Email Support</h4>
@@ -787,7 +727,8 @@ if not st.session_state.logged_in:
             st.markdown('<div class="title-text">Welcome Back</div><div class="sub-text">Please enter your credentials to log in</div>', unsafe_allow_html=True)
             email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="l_email")
             pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="l_pwd")
-            st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_self" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>', unsafe_allow_html=True)
+            forgot_html = f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_self" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500; position:relative; z-index:9999999; pointer-events:auto;">Forgot Password?</a></div>'
+            st.markdown(forgot_html.replace('\n', ''), unsafe_allow_html=True)
             
             if st.button("Sign In", type="primary", use_container_width=True):
                 if not email or not pwd: st.error("Please enter email and password.")
@@ -801,7 +742,9 @@ if not st.session_state.logged_in:
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else: st.error("Invalid credentials")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_self" class="native-link">Sign Up</a></div>', unsafe_allow_html=True)
+                    
+            signup_html = f'<div style="text-align: center; margin-top: 25px; position:relative; z-index:9999999; pointer-events:auto;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_self" class="native-link">Sign Up</a></div>'
+            st.markdown(signup_html.replace('\n', ''), unsafe_allow_html=True)
 
         elif auth_view == "signup":
             st.markdown('<div class="title-text">Sign Up</div><div class="sub-text">Create an account to build your vault.</div>', unsafe_allow_html=True)
@@ -824,7 +767,8 @@ if not st.session_state.logged_in:
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else: st.error("Email already registered.")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Already have an account?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Sign In</a></div>', unsafe_allow_html=True)
+            login_html = f'<div style="text-align: center; margin-top: 25px; position:relative; z-index:9999999; pointer-events:auto;"><span class="muted-text">Already have an account?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Sign In</a></div>'
+            st.markdown(login_html.replace('\n', ''), unsafe_allow_html=True)
 
         elif auth_view == "forgot":
             st.markdown('<div class="title-text">Forgot Password</div>', unsafe_allow_html=True)
@@ -859,7 +803,8 @@ if not st.session_state.logged_in:
                             st.session_state.reset_step = 0; st.session_state.reset_email = ""
                             st.query_params["view"] = "login"; st.rerun()
                         else: st.error("Invalid or expired token!")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Log In</a></div>', unsafe_allow_html=True)
+            login_html = f'<div style="text-align: center; margin-top: 25px; position:relative; z-index:9999999; pointer-events:auto;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Log In</a></div>'
+            st.markdown(login_html.replace('\n', ''), unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ================= DASHBOARD APP (LOGGED IN) =================
@@ -921,26 +866,14 @@ elif active_tab in ["drive", "profile"]:
         title_text = "Albums" if is_root else html.escape(current["folder_name"])
         if not is_root and current.get("is_locked"): title_text += " 🔒"
 
-        # ROOT VIEW: Shows Profile / Notifications
-        if is_root:
-            c_title, c_prof = st.columns([5, 2])
-            with c_title: 
-                st.markdown(f'<div class="dashboard-title">{title_text}</div>', unsafe_allow_html=True)
-            with c_prof:
-                st.markdown('<div style="display: flex; justify-content: flex-end;">', unsafe_allow_html=True)
-                unread_notifs = list(notifications_col.find({"username": st.session_state.username, "is_read": False}).sort("created_at", -1))
-                notif_dot_html = '<div class="profile-notif-dot"></div>' if unread_notifs else ''
-                notif_link = get_nav_link(page="app", tab="drive", folder=actual_folder_id, notif_hub=1)
-                
-                profile_html = f'<a href="{notif_link}" target="_parent" class="profile-header-widget" style="text-decoration:none;"><img src="{html.escape(prof_pic)}"><span>{display_name}</span>{notif_dot_html}</a>'
-                st.markdown(profile_html, unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-        # FOLDER VIEW: Only Options Menu, NO Profile widget
-        else:
-            c_title, c_opt = st.columns([5, 2])
-            with c_title: 
-                st.markdown(f'<div class="dashboard-title">{title_text}</div>', unsafe_allow_html=True)
-            with c_opt:
+        # ROOT & FOLDER VIEW
+        c_title, c_opt, c_prof = st.columns([4, 1, 2])
+        
+        with c_title: 
+            st.markdown(f'<div class="dashboard-title">{title_text}</div>', unsafe_allow_html=True)
+            
+        with c_opt:
+            if not is_root:
                 st.markdown('<div class="folder-options-btn" style="display: flex; justify-content: flex-end;">', unsafe_allow_html=True)
                 with st.popover("⋮ Options"):
                     st.markdown("**Album Management**")
@@ -949,7 +882,7 @@ elif active_tab in ["drive", "profile"]:
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     st.markdown("**Sharing & Privacy**")
                     if st.button("🔗 Share Folder Media BATCH", key=f"share_folder_{current['_id']}", use_container_width=True):
-                        st.query_params["share_media"] = str(current['_id']) 
+                        st.query_params["share_folder"] = str(current['_id']) 
                         st.rerun()
                     is_locked = current.get("is_locked", False)
                     lock_btn_txt = "🔓 Make Public (Community)" if is_locked else "🔒 Lock Album (Private)"
@@ -974,6 +907,17 @@ elif active_tab in ["drive", "profile"]:
                             st.session_state.uploader_key += 1; st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
+        with c_prof:
+            # ONLY Show profile on ROOT page
+            if is_root:
+                unread_notifs = list(notifications_col.find({"username": st.session_state.username, "is_read": False}).sort("created_at", -1))
+                notif_dot_html = '<div class="profile-notif-dot"></div>' if unread_notifs else ''
+                notif_link = get_nav_link(page="app", tab="drive", folder=actual_folder_id, notif_hub=1)
+                
+                # Single-line format prevents HTML bleed entirely
+                profile_html = f'<div style="display:flex; justify-content:flex-end;"><a href="{notif_link}" target="_parent" class="profile-header-widget" style="text-decoration:none;"><img src="{html.escape(prof_pic)}"><span>{display_name}</span>{notif_dot_html}</a></div>'
+                st.markdown(profile_html.replace('\n', ''), unsafe_allow_html=True)
+
 
         # --- DYNAMIC STORIES ---
         if is_root and st.session_state.story_groups:
@@ -995,7 +939,7 @@ elif active_tab in ["drive", "profile"]:
                 story_html += f'<a href="{get_nav_link("app", tab="drive", folder="root", story_group=g_idx, story_idx=0)}" target="_parent" class="story-link"><div class="story-item"><div class="story-ring" style="background: {c};"><div class="story-inner">{thumb_html}</div></div><div class="story-label">{safe_label}</div></div></a>'
             
             story_html += '</div>'
-            st.markdown(story_html, unsafe_allow_html=True)
+            st.markdown(story_html.replace('\n', ''), unsafe_allow_html=True)
             st.write("<br>", unsafe_allow_html=True)
 
 
@@ -1034,10 +978,10 @@ elif active_tab in ["drive", "profile"]:
                     if cover:
                         safe_cover = html.escape(cover)
                         html_str = f'<a href="{folder_url}" target="_parent" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px; transition: transform 0.2s ease; position: relative;" onmouseover="this.style.transform=\'scale(1.02)\'" onmouseout="this.style.transform=\'scale(1)\'"><div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid var(--border);">{lock_indicator}<img src="{safe_cover}" style="width: 100%; height: 100%; object-fit: cover;"></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
-                        st.markdown(html_str, unsafe_allow_html=True)
+                        st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
                     else:
                         html_str = f'<a href="{folder_url}" target="_parent" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div style="position: relative; width: 100%; aspect-ratio: 1/1; border-radius: 12px; background-color: var(--bg-card); border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 8px; transition: transform 0.2s ease;" onmouseover="this.style.transform=\'scale(1.02)\'" onmouseout="this.style.transform=\'scale(1)\'">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
-                        st.markdown(html_str, unsafe_allow_html=True)
+                        st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
         if files:
             st.write("<br>", unsafe_allow_html=True)
@@ -1060,13 +1004,13 @@ elif active_tab in ["drive", "profile"]:
                     else:
                         media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;"></video></div>'
                     media_html += '</a>'
-                    st.markdown(media_html.strip(), unsafe_allow_html=True)
+                    st.markdown(media_html.replace('\n', ''), unsafe_allow_html=True)
 
                     with st.popover("⋮"):
                         st.markdown("**Actions**")
                         
                         if st.button("🔗 Share Media", key=f"share_{file['_id']}", use_container_width=True):
-                            st.query_params["share_media"] = str(file['_id'])
+                            st.query_params["share_file"] = str(file['_id'])
                             st.rerun()
                             
                         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
@@ -1086,7 +1030,8 @@ elif active_tab in ["drive", "profile"]:
                                 st.rerun()
                                 
                         st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-                        st.markdown(f'<a href="{safe_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
+                        dl_html = f'<a href="{safe_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>'
+                        st.markdown(dl_html.replace('\n', ''), unsafe_allow_html=True)
                         
                         if not is_root:
                             if st.button("🖼️ Set Cover", key=f"cov_{file['_id']}", use_container_width=True):
