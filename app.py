@@ -144,7 +144,6 @@ def locked_reaction_dialog(remaining_seconds):
     if st.button("Got it", use_container_width=True):
         st.rerun()
 
-# --- REWROTE: Clean Notification Popup Window ---
 @st.dialog("🔔 Notifications Hub")
 def render_notif_hub_dialog():
     unread_notifs = list(notifications_col.find({"username": st.session_state.username, "is_read": False}).sort("created_at", -1))
@@ -456,10 +455,12 @@ def inject_global_css():
     }
     .stApp { background-color: var(--bg-app) !important; color: var(--text-primary) !important; }
     p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
-    #MainMenu { visibility: hidden; } .stDeployButton { display: none !important; }
     
-    /* FIX: Hide Streamlit Header completely to prevent mobile click blocks */
-    header[data-testid="stHeader"] { display: none !important; pointer-events: none !important; }
+    /* FIX FOR MOBILE OVERLAYS: Eradicate Streamlit's native top headers entirely */
+    header[data-testid="stHeader"], div[data-testid="stToolbar"], div[data-testid="stDecoration"] { 
+        display: none !important; pointer-events: none !important; width: 0 !important; height: 0 !important; 
+    }
+    #MainMenu { visibility: hidden; } .stDeployButton { display: none !important; }
     
     .title-text { color: var(--text-primary) !important; font-weight: 800; font-size: 32px; text-align: center; margin-bottom: 5px; }
     .sub-text { color: var(--text-secondary) !important; font-size: 15px; text-align: center; margin-bottom: 30px; }
@@ -469,7 +470,7 @@ def inject_global_css():
     .auth-container, .content-card {
         max-width: 480px !important; width: 90% !important; background-color: var(--bg-card) !important;
         padding: 50px 40px !important; border-radius: 20px !important; border: 1px solid var(--border) !important; margin: 8vh auto !important; 
-        position: relative; z-index: 10;
+        position: relative; z-index: 9999999 !important; pointer-events: auto !important;
     }
     .content-card { max-width: 800px !important; }
     .stTextInput div[data-baseweb="input"], .stDateInput div[data-baseweb="input"], .stTextArea div[data-baseweb="textarea"] {
@@ -484,12 +485,12 @@ def inject_global_css():
         background-color: var(--accent) !important; color: #ffffff !important; border: none !important; border-radius: 12px !important; 
         padding: 14px 24px !important; font-weight: 600 !important; width: 100% !important; margin-top: 10px !important; 
     }
-    .native-link { color: var(--accent) !important; text-decoration: none; font-weight: 600; } .native-link:hover { text-decoration: underline; }
+    .native-link { color: var(--accent) !important; text-decoration: none; font-weight: 600; cursor: pointer; } .native-link:hover { text-decoration: underline; }
     
-    /* FIX: Bring Custom Nav above any invisible blocks */
-    .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 999999; pointer-events: auto; }
-    .nav-links { display: flex; gap: 20px; align-items: center; position: relative; z-index: 999999; }
-    .nav-links a { color: var(--text-primary) !important; text-decoration: none; font-weight: 500; font-size: 15px; position: relative; z-index: 999999; }
+    /* Z-INDEX OVERRIDE FOR MOBILE CLICKS */
+    .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 9999999 !important; pointer-events: auto !important; }
+    .nav-links { display: flex; gap: 20px; align-items: center; position: relative; z-index: 9999999 !important; pointer-events: auto !important; }
+    .nav-links a { color: var(--text-primary) !important; text-decoration: none; font-weight: 500; font-size: 15px; position: relative; z-index: 9999999 !important; pointer-events: auto !important; cursor: pointer; }
     .nav-links a:hover { color: var(--accent) !important; }
 
     .sidebar-link {
@@ -533,7 +534,6 @@ def inject_global_css():
     }
     .media-container-wrapper [data-testid="stPopover"] > button:hover { background-color: rgba(0, 0, 0, 0.9) !important; transform: scale(1.05); }
     
-    /* FIX: Folder Options 3-dots matching style */
     .folder-options-btn [data-testid="stPopover"] > button {
         background-color: var(--bg-card) !important; color: var(--text-primary) !important;
         border: 1px solid var(--border) !important; border-radius: 8px !important; height: 38px !important;
@@ -543,7 +543,6 @@ def inject_global_css():
     
     [data-testid="stFileUploader"] > div { background-color: var(--bg-card) !important; border: 1px dashed var(--border) !important; border-radius: 16px !important; padding: 20px !important; }
     
-    /* REWROTE: Clean Profile Notification Hub CSS */
     .profile-header-widget { 
         display: inline-flex; align-items: center; gap: 12px; background: var(--bg-card); padding: 6px 16px 6px 6px; border-radius: 50px; 
         border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(0,0,0,0.05); transition: transform 0.2s; cursor: pointer; 
@@ -558,21 +557,18 @@ def inject_global_css():
         background-color: #ff3b30; border-radius: 50%; border: 1.5px solid var(--bg-card);
         box-shadow: 0 0 5px rgba(255, 59, 48, 0.5); z-index: 20;
     }
-    @media (prefers-color-scheme: dark) { .profile-notif-dot { border-color: var(--bg-card); } }
 
-    /* FIX: Footer fixed to bottom for landing pages, pushed for app pages */
-    .block-container { padding-bottom: 80px !important; min-height: 85vh; }
+    .block-container { padding-bottom: 80px !important; min-height: 85vh; padding-top: 2rem !important; z-index: 1; position: relative; }
     .custom-footer { 
         position: fixed; bottom: 0; left: 0; width: 100%; z-index: 100;
         background: var(--bg-app); padding: 15px; text-align: center; 
         border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; 
     }
 
-    /* FIX: Mobile Responsiveness */
     @media (max-width: 768px) {
         .auth-container, .content-card { border: none !important; border-radius: 0 !important; padding: 30px 20px !important; margin: 0 !important; width: 100% !important; max-width: 100% !important;}
         .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; }
-        .nav-links { gap: 20px; flex-wrap: wrap; justify-content: center;}
+        .nav-links { gap: 20px; flex-wrap: wrap; justify-content: center; }
         .nav-links a { font-size: 15px; padding: 5px; }
         .brand-logo { font-size: 26px; }
         .block-container { padding-top: 1rem !important; } 
@@ -583,7 +579,6 @@ def inject_global_css():
 
 
 # ================= CATCH POPUPS, DIALOGS, & TRUE FULL-SCREEN LIGHTBOX =================
-# NEW: Catch Notification Hub Click
 if "notif_hub" in st.query_params and st.session_state.logged_in:
     inject_global_css()
     render_notif_hub_dialog()
@@ -698,7 +693,9 @@ if not st.session_state.logged_in:
         if app_page == "landing":
             st.markdown('<div class="title-text" style="font-size: 3.5rem; margin-top: 4rem;">Secure Your Memories</div>', unsafe_allow_html=True)
             st.markdown('<div class="sub-text" style="font-size: 1.25rem; max-width: 600px; margin: 0 auto 3rem auto;">Your personal digital bibliotheca. Access, organize, and protect your media with absolute privacy.</div>', unsafe_allow_html=True)
-            st.markdown(f'<div style="text-align: center; position: relative; z-index: 50;"><a href="{get_nav_link("auth", "signup")}" target="_parent" style="background: var(--accent); color: #ffffff; padding: 14px 30px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 16px; display: inline-block;">Create Free Vault</a></div>', unsafe_allow_html=True)
+            
+            # Massive z-index here guarantees clicking on mobile works
+            st.markdown(f'<div style="text-align: center; position: relative; z-index: 9999999 !important; pointer-events: auto !important;"><a href="{get_nav_link("auth", "signup")}" target="_parent" style="background: var(--accent); color: #ffffff; padding: 14px 30px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 16px; display: inline-block;">Create Free Vault</a></div>', unsafe_allow_html=True)
             st.write("<br><br><br><h3 style='text-align: center; margin-bottom: 30px;'>Community Vault Gallery</h3>", unsafe_allow_html=True)
             
             pipeline = [
@@ -747,7 +744,7 @@ if not st.session_state.logged_in:
             
         elif app_page == "policy":
             st.markdown("""
-            <div class="content-card" style="position: relative; z-index: 10;">
+            <div class="content-card">
                 <h2>Privacy Policy & Permissions</h2>
                 <p class="muted-text">Last Updated: April 2026</p>
                 <hr style='border-color: var(--border);'>
@@ -762,7 +759,7 @@ if not st.session_state.logged_in:
             
         elif app_page == "contact":
             st.markdown("""
-            <div class="content-card" style="text-align: center; position: relative; z-index: 10;">
+            <div class="content-card" style="text-align: center;">
                 <h2>Contact Support</h2>
                 <p>Have questions about your vault or our privacy policies? We are here to help.</p><br>
                 <h4>Email Support</h4>
@@ -782,7 +779,7 @@ if not st.session_state.logged_in:
             st.markdown('<div class="title-text">Welcome Back</div><div class="sub-text">Please enter your credentials to log in</div>', unsafe_allow_html=True)
             email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="l_email")
             pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="l_pwd")
-            st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_parent" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_parent" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500; position:relative; z-index:9999999;">Forgot Password?</a></div>', unsafe_allow_html=True)
             
             if st.button("Sign In", type="primary", use_container_width=True):
                 if not email or not pwd: st.error("Please enter email and password.")
@@ -796,7 +793,7 @@ if not st.session_state.logged_in:
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else: st.error("Invalid credentials")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_parent" class="native-link">Sign Up</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px; position:relative; z-index:9999999;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_parent" class="native-link">Sign Up</a></div>', unsafe_allow_html=True)
 
         elif auth_view == "signup":
             st.markdown('<div class="title-text">Sign Up</div><div class="sub-text">Create an account to build your vault.</div>', unsafe_allow_html=True)
@@ -819,7 +816,7 @@ if not st.session_state.logged_in:
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else: st.error("Email already registered.")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Already have an account?</span> <a href="{get_nav_link("auth", "login")}" target="_parent" class="native-link">Sign In</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px; position:relative; z-index:9999999;"><span class="muted-text">Already have an account?</span> <a href="{get_nav_link("auth", "login")}" target="_parent" class="native-link">Sign In</a></div>', unsafe_allow_html=True)
 
         elif auth_view == "forgot":
             st.markdown('<div class="title-text">Forgot Password</div>', unsafe_allow_html=True)
@@ -854,7 +851,7 @@ if not st.session_state.logged_in:
                             st.session_state.reset_step = 0; st.session_state.reset_email = ""
                             st.query_params["view"] = "login"; st.rerun()
                         else: st.error("Invalid or expired token!")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_parent" class="native-link">Log In</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px; position:relative; z-index:9999999;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_parent" class="native-link">Log In</a></div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ================= DASHBOARD APP (LOGGED IN) =================
@@ -910,47 +907,52 @@ elif active_tab in ["drive", "profile"]:
         current = folders_col.find_one({"_id": actual_folder_id})
         is_root = current is None or current.get("parent_id") is None
 
-        # --- HEADER & REWROTE NOTIFICATION HUB (Req 1, 2) ---
         prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
         display_name = html.escape(user_data.get("first_name", st.session_state.username))
         
-        c_title, c_opt, c_prof = st.columns([5, 1, 2])
         title_text = "Albums" if is_root else html.escape(current["folder_name"])
         if not is_root and current.get("is_locked"): title_text += " 🔒"
-        
-        with c_title: 
-            st.markdown(f'<div class="dashboard-title">{title_text}</div>', unsafe_allow_html=True)
-        
-        # Options Popover right next to the title (Req 5: Clean UI)
-        with c_opt:
-            if not is_root:
-                st.markdown('<div class="folder-options-btn">', unsafe_allow_html=True)
-                with st.popover("⋮ Options", use_container_width=True):
+
+        # --- FIX 2: CONDITIONAL HEADER FOR CLEAN INNER FOLDER LAYOUT ---
+        if is_root:
+            c_title, c_prof = st.columns([5, 2])
+            with c_title: 
+                st.markdown(f'<div class="dashboard-title">{title_text}</div>', unsafe_allow_html=True)
+            with c_prof:
+                st.markdown('<div style="display: flex; justify-content: flex-end;">', unsafe_allow_html=True)
+                unread_notifs = list(notifications_col.find({"username": st.session_state.username, "is_read": False}).sort("created_at", -1))
+                notif_dot_html = '<div class="profile-notif-dot"></div>' if unread_notifs else ''
+                notif_link = get_nav_link(page="app", tab="drive", folder=actual_folder_id, notif_hub=1)
+                
+                # FIX 1: Absolutely flattened HTML to prevent markdown parser breaks
+                profile_html = f'<a href="{notif_link}" target="_parent" class="profile-header-widget"><img src="{html.escape(prof_pic)}"><span>{display_name}</span>{notif_dot_html}</a>'
+                st.markdown(profile_html, unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            c_title, c_opt = st.columns([5, 2])
+            with c_title: 
+                st.markdown(f'<div class="dashboard-title">{title_text}</div>', unsafe_allow_html=True)
+            with c_opt:
+                st.markdown('<div class="folder-options-btn" style="display: flex; justify-content: flex-end;">', unsafe_allow_html=True)
+                with st.popover("⋮ Options"):
                     st.markdown("**Album Management**")
                     if st.button("✏️ Rename Album", key=f"edit_{current['_id']}", use_container_width=True): rename_folder_dialog(current["_id"], current["folder_name"])
                     if st.button("🗑 Delete Album", key=f"del_fold_{current['_id']}", use_container_width=True): delete_folder_dialog(current["_id"], current["folder_name"])
-                    
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-                    
-                    # Moved Sharing and Privacy inside the 3-dots
                     st.markdown("**Sharing & Privacy**")
                     if st.button("🔗 Share Folder Media BATCH", key=f"share_folder_{current['_id']}", use_container_width=True):
                         st.query_params["share_media"] = str(current['_id']) 
                         st.rerun()
-                    
                     is_locked = current.get("is_locked", False)
                     lock_btn_txt = "🔓 Make Public (Community)" if is_locked else "🔒 Lock Album (Private)"
                     if st.button(lock_btn_txt, key=f"lock_fold_{current['_id']}", use_container_width=True):
                         folders_col.update_one({"_id": current["_id"]}, {"$set": {"is_locked": not is_locked}})
                         st.rerun()
-                        
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     st.markdown("**Add Content**")
-                    
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
                         submit_button = st.form_submit_button("Sync Files", type="primary", use_container_width=True)
-                        
                         if submit_button and uploaded_files:
                             with st.spinner("Syncing to cloud..."):
                                 for file in uploaded_files:
@@ -963,23 +965,7 @@ elif active_tab in ["drive", "profile"]:
                                     except Exception as e: st.error(f"Failed to upload {html.escape(file.name)}.")
                             st.session_state.uploader_key += 1; st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Fixed HTML routing. Replaced `st.popover` with an HTML tag linking to a dialog pop-up hub.
-        with c_prof:
-            st.markdown('<div style="display: flex; justify-content: flex-end;">', unsafe_allow_html=True)
-            unread_notifs = list(notifications_col.find({"username": st.session_state.username, "is_read": False}).sort("created_at", -1))
-            notif_dot_html = '<div class="profile-notif-dot"></div>' if unread_notifs else ''
-            notif_link = get_nav_link(page="app", tab="drive", folder=actual_folder_id, notif_hub=1)
-            
-            profile_html = f"""
-            <a href="{notif_link}" target="_parent" class="profile-header-widget">
-                <img src="{html.escape(prof_pic)}">
-                <span>{display_name}</span>
-                {notif_dot_html}
-            </a>
-            """
-            st.markdown(profile_html.strip(), unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+
 
         # --- DYNAMIC STORIES ---
         if is_root and st.session_state.story_groups:
@@ -1019,7 +1005,6 @@ elif active_tab in ["drive", "profile"]:
         # --- CONTENT GRID (ALBUMS & MEDIA) ---
         folders = list(folders_col.find({"username": st.session_state.username, "parent_id": actual_folder_id}))
         
-        # PIN-SORTING LOGIC
         files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
         pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0))
         unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
