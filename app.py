@@ -15,7 +15,7 @@ import random
 import datetime
 
 # ---------------- UI CONFIG ----------------
-st.set_page_config(page_title="voidememo  Vault", page_icon="🌐", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="voidememo Vault", page_icon="🌐", layout="wide", initial_sidebar_state="expanded")
 
 # ---------------- CONFIG (PRODUCTION SAFE) ----------------
 MONGO_URI = st.secrets["MONGO_URI"]
@@ -100,22 +100,14 @@ def delete_file_dialog(file_id, public_id, resource_type):
     if c2.button("No, Cancel", use_container_width=True):
         st.rerun()
 
-@st.dialog("⏳ Reaction Locked")
-def locked_reaction_dialog(remaining_seconds):
-    hours, remainder = divmod(int(remaining_seconds), 3600)
-    minutes, _ = divmod(remainder, 60)
-    st.warning("Emoji changes are locked for 24 hours after a reaction.")
-    st.info(f"Time remaining: **{hours} hours and {minutes} minutes**")
-    if st.button("Got it", use_container_width=True):
-        st.rerun()
-
 # ================= NATIVE GESTURE ROUTING SYSTEM =================
-def get_nav_link(page=None, view=None, tab=None, folder=None, story_idx=None):
+def get_nav_link(page=None, view=None, tab=None, folder=None, story_group=None, story_idx=None):
     params = []
     if page is not None: params.append(f"page={page}")
     if view is not None: params.append(f"view={view}")
     if tab is not None: params.append(f"tab={tab}")
     if folder is not None: params.append(f"folder={folder}")
+    if story_group is not None: params.append(f"story_group={story_group}")
     if story_idx is not None: params.append(f"story_idx={story_idx}")
     if "session" in st.query_params:
         params.append(f"session={st.query_params['session']}")
@@ -128,8 +120,7 @@ active_folder = st.query_params.get("folder", "root")
 
 defaults = {
     "logged_in": False, "username": "", "reset_step": 0, "reset_email": "",
-    "uploader_key": 0, "folder_key": 0,
-    "story_sample": [], "story_timestamp": 0 # 5-minute cache
+    "uploader_key": 0, "folder_key": 0, "story_groups": []
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -142,74 +133,117 @@ if not st.session_state.logged_in and "session" in st.query_params:
         st.session_state.logged_in = True
         st.session_state.username = user["username"]
 
-# ================= TRUE STORY POPUP MODAL =================
-@st.dialog("✨ Memory Highlight", width="large")
-def render_story_dialog(idx):
-    sample = st.session_state.story_sample
-    if not sample or idx >= len(sample):
+# ================= TIME-SEEDED DETERMINISTIC ENGINE =================
+if st.session_state.logged_in:
+    time_window = int(time.time() / 300) 
+    random.seed(f"{st.session_state.username}_{time_window}") 
+    
+    all_user_media = list(files_col.find({"username": st.session_state.username}))
+    story_groups = []
+    
+    if all_user_media:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        recent, favorites, throwback = [], [], []
+        
+        for f in all_user_media:
+            upload_date = f["_id"].generation_time
+            age_days = (now - upload_date).days
+            if age_days <= 7: recent.append(f)
+            if f.get("tag"): favorites.append(f)
+            if age_days > 30: throwback.append(f)
+                
+        if recent:
+            recent.sort(key=lambda x: x["_id"].generation_time, reverse=True)
+            story_groups.append({"label": "Recent Highlights", "items": recent[:6]})
+            
+        if throwback:
+            random.shuffle(throwback)
+            story_groups.append({"label": "Memory Lane", "items": throwback[:6]})
+            
+        if favorites:
+            random.shuffle(favorites)
+            story_groups.append({"label": "Favorites ⭐", "items": favorites[:6]})
+            
+        random_media = all_user_media[:]
+        random.shuffle(random_media)
+        story_groups.append({"label": "Discover", "items": random_media[:6]})
+            
+    st.session_state.story_groups = story_groups
+    random.seed() 
+
+
+# ================= TRUE STORY POPUP MODAL (GLASSMORPHISM & AUTO-ROUTING) =================
+@st.dialog("✨ Memory Highlight")
+def render_story_dialog(group_idx, idx):
+    groups = st.session_state.get("story_groups", [])
+    
+    if not groups or group_idx >= len(groups) or idx >= len(groups[group_idx]["items"]):
+        if "story_group" in st.query_params: del st.query_params["story_group"]
         if "story_idx" in st.query_params: del st.query_params["story_idx"]
         st.rerun()
         
-    current_story = sample[idx]
+    current_group = groups[group_idx]
+    current_story = current_group["items"][idx]
     
+    # Advanced Glassmorphism CSS & Constraints to keep it "Medium"
     st.markdown("""
     <style>
-    .story-progress-bar { width: 100%; height: 4px; background: rgba(150,150,150,0.3); border-radius: 2px; margin-bottom: 15px; overflow: hidden; }
-    .story-progress-fill { height: 100%; background: var(--accent); width: 0%; animation: progress-fill 15s linear forwards; }
+    /* Turn the dialog container into frosted glass */
+    div[data-testid="stDialog"] > div {
+        background: rgba(40, 40, 40, 0.4) !important;
+        backdrop-filter: blur(25px) !important;
+        -webkit-backdrop-filter: blur(25px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        border-radius: 24px !important;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
+        padding: 10px 20px 20px 20px !important;
+        max-width: 500px !important; /* Forces medium width */
+        margin: auto;
+    }
+    
+    /* Make the outer screen overlay darker to emphasize the popup */
+    div[data-testid="stModal"] > div {
+        background-color: rgba(0, 0, 0, 0.7) !important; 
+    }
+
+    button[aria-label="Close"] { display: none !important; } 
+    
+    .story-progress-bar { width: 100%; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; margin-bottom: 15px; overflow: hidden; }
+    .story-progress-fill { height: 100%; background: #ffffff; width: 0%; animation: progress-fill 15s linear forwards; box-shadow: 0 0 10px rgba(255,255,255,0.8);}
     @keyframes progress-fill { to { width: 100%; } }
     </style>
-    <div class="story-progress-bar"><div class="story-progress-fill"></div></div>
     """, unsafe_allow_html=True)
     
-    if current_story["resource_type"] == "image":
-        st.image(current_story["url"], use_container_width=True)
-    else:
-        st.video(current_story["url"], autoplay=True)
-        
-    c1, c2 = st.columns(2)
-    next_idx = idx + 1
+    st.markdown(f"<h4 style='text-align: center; margin-top: -5px; color: white !important; font-weight: 600; text-shadow: 0 2px 4px rgba(0,0,0,0.5);'>{current_group['label']}</h4>", unsafe_allow_html=True)
+    st.markdown('<div class="story-progress-bar"><div class="story-progress-fill"></div></div>', unsafe_allow_html=True)
     
-    if next_idx < len(sample):
-        next_url = get_nav_link("app", tab="drive", folder="root", story_idx=next_idx)
-        btn_txt = "Next ⏭️"
+    # HTML Rendering to strictly constrain max-height to 55vh (keeps it medium-sized)
+    if current_story["resource_type"] == "image":
+        st.markdown(f'<div style="display:flex; justify-content:center;"><img src="{current_story["url"]}" style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);"></div>', unsafe_allow_html=True)
     else:
-        next_url = get_nav_link("app", tab="drive", folder="root")
-        btn_txt = "Finish ✓"
+        st.markdown(f'<div style="display:flex; justify-content:center;"><video src="{current_story["url"]}" autoplay muted playsinline style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);"></video></div>', unsafe_allow_html=True)
         
-    if c1.button(btn_txt, use_container_width=True):
-        if next_idx < len(sample): st.query_params["story_idx"] = next_idx
-        else: del st.query_params["story_idx"]
-        st.rerun()
+    next_idx = idx + 1
+    next_group_idx = group_idx + 1
+    session_token = st.query_params.get('session', '')
+    
+    if next_idx < len(current_group["items"]):
+        next_search = f"?page=app&tab=drive&folder=root&story_group={group_idx}&story_idx={next_idx}&session={session_token}"
+    elif next_group_idx < len(groups):
+        next_search = f"?page=app&tab=drive&folder=root&story_group={next_group_idx}&story_idx=0&session={session_token}"
+    else:
+        next_search = f"?page=app&tab=drive&folder=root&session={session_token}"
         
-    if c2.button("Close ✕", use_container_width=True):
-        if "story_idx" in st.query_params: del st.query_params["story_idx"]
-        st.rerun()
-        
+    # Bulletproof Top-Level Routing (Bypasses nested iframes entirely)
     components.html(f"""
     <script>
-    setTimeout(function() {{
-        window.parent.location.href = "{next_url}";
-    }}, 15000);
+        if (window.top.storyTimeout) {{ clearTimeout(window.top.storyTimeout); }}
+        window.top.storyTimeout = setTimeout(function() {{
+            window.top.location.href = "{next_search}";
+        }}, 15000);
     </script>
     """, height=0)
 
-
-# ---------------- AUTH LOGIC ----------------
-def register(email, password, first_name, last_name, birthday):
-    if users_col.find_one({"email": email}): return False
-    username = email.split('@')[0]
-    users_col.insert_one({
-        "username": username, "first_name": first_name, "last_name": last_name,
-        "birthday": str(birthday), "email": email, "password": hash_password(password),
-        "profile_photo": "", "bio": "", "session_token": "", "reset_otp": "" 
-    })
-    folders_col.insert_one({"username": username, "folder_name": "root", "parent_id": None})
-    return username
-
-def login(email, password):
-    user = users_col.find_one({"email": email})
-    if user and user["password"] == hash_password(password): return user["username"]
-    return False
 
 # ================= CORE CSS: AUTO LIGHT/DARK SYSTEM =================
 def inject_global_css():
@@ -277,7 +311,7 @@ def inject_global_css():
     .native-link:hover { text-decoration: underline; }
     
     .sidebar-link {
-        display: block; background: transparent; color: var(--text-primary) !important;
+        display: flex; align-items: center; gap: 10px; background: transparent; color: var(--text-primary) !important;
         text-decoration: none; font-weight: 500; font-size: 15px;
         border-radius: 8px; padding: 10px 14px; margin-bottom: 4px; transition: background 0.2s;
     }
@@ -316,7 +350,7 @@ def inject_global_css():
     }
     .square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; }
     
-    /* OVERLAID 3-DOTS MENU (Now positioned flawlessly inside the image) */
+    /* OVERLAID 3-DOTS MENU */
     .image-actions-overlay {
         position: absolute; top: 10px; right: 10px; z-index: 20;
     }
@@ -330,9 +364,11 @@ def inject_global_css():
     .image-actions-overlay [data-testid="stPopover"] > button:hover { background-color: rgba(0, 0, 0, 0.8) !important; }
     
     [data-testid="stFileUploader"] > div { background-color: var(--bg-card) !important; border: 1px dashed var(--border) !important; border-radius: 16px !important; padding: 20px !important; }
-    .profile-header-widget { display: flex; align-items: center; gap: 12px; background: var(--bg-card); padding: 6px 16px 6px 6px; border-radius: 50px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+    
+    .profile-header-widget { display: flex; align-items: center; gap: 12px; background: var(--bg-card); padding: 6px 16px 6px 6px; border-radius: 50px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(0,0,0,0.05); transition: transform 0.2s; cursor: pointer; color: var(--text-primary) !important;}
+    .profile-header-widget:hover { transform: scale(1.02); }
     .profile-header-widget img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
-    .profile-header-widget span { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+    .profile-header-widget span { font-weight: 600; font-size: 14px;}
 
     .custom-footer { margin-top: 50px; padding: 20px; text-align: center; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; }
 
@@ -347,13 +383,22 @@ def inject_global_css():
 
 
 # Catch Story Dialog Trigger First
-if "story_idx" in st.query_params and st.session_state.logged_in:
+if "story_group" in st.query_params and "story_idx" in st.query_params and st.session_state.logged_in:
     inject_global_css()
-    render_story_dialog(int(st.query_params["story_idx"]))
+    render_story_dialog(int(st.query_params["story_group"]), int(st.query_params["story_idx"]))
+else:
+    components.html("""
+    <script>
+        if (window.top.storyTimeout) {
+            clearTimeout(window.top.storyTimeout);
+            window.top.storyTimeout = null;
+        }
+    </script>
+    """, height=0)
 
 
 # ================= PUBLIC ROUTING (LOGGED OUT) =================
-elif not st.session_state.logged_in:
+if not st.session_state.logged_in:
     inject_global_css()
     
     if app_page not in ["landing", "policy", "contact", "auth"]:
@@ -363,11 +408,11 @@ elif not st.session_state.logged_in:
     if app_page != "auth":
         st.markdown(f"""
         <div class="top-nav">
-            <a href="{get_nav_link('landing')}" target="_self" class="brand-logo">voidememo</a>
+            <a href="{get_nav_link('landing')}" target="_parent" class="brand-logo">voidememo</a>
             <div class="nav-links">
-                <a href="{get_nav_link('landing')}" target="_self">Home</a>
-                <a href="{get_nav_link('policy')}" target="_self">Policy</a>
-                <a href="{get_nav_link('auth', 'login')}" target="_self" style="color: var(--accent) !important;">Log In</a>
+                <a href="{get_nav_link('landing')}" target="_parent">Home</a>
+                <a href="{get_nav_link('policy')}" target="_parent">Policy</a>
+                <a href="{get_nav_link('auth', 'login')}" target="_parent" style="color: var(--accent) !important;">Log In</a>
             </div>
         </div>
         <hr style='margin: 0; border-color: var(--border);'>
@@ -376,7 +421,7 @@ elif not st.session_state.logged_in:
         if app_page == "landing":
             st.markdown('<div class="title-text" style="font-size: 3.5rem; margin-top: 4rem;">Secure Your Memories</div>', unsafe_allow_html=True)
             st.markdown('<div class="sub-text" style="font-size: 1.25rem; max-width: 600px; margin: 0 auto 3rem auto;">Your personal digital bibliotheca. Access, organize, and protect your media with absolute privacy.</div>', unsafe_allow_html=True)
-            st.markdown(f'<div style="text-align: center;"><a href="{get_nav_link("auth", "signup")}" target="_self" style="background: var(--accent); color: #ffffff; padding: 14px 30px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 16px;">Create Free Vault</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center;"><a href="{get_nav_link("auth", "signup")}" target="_parent" style="background: var(--accent); color: #ffffff; padding: 14px 30px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 16px;">Create Free Vault</a></div>', unsafe_allow_html=True)
             st.write("<br><br><br><h3 style='text-align: center;'>Sample Vault Gallery</h3><br>", unsafe_allow_html=True)
             img_c1, img_c2, img_c3 = st.columns(3)
             with img_c1: st.image("https://images.unsplash.com/photo-1516541196182-6bdb0516ed27?auto=format&fit=crop&w=600&q=80", use_container_width=True)
@@ -418,7 +463,7 @@ elif not st.session_state.logged_in:
             st.markdown('<div class="title-text">Welcome Back</div><div class="sub-text">Please enter your credentials to log in</div>', unsafe_allow_html=True)
             email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="l_email")
             pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="l_pwd")
-            st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_self" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_parent" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>', unsafe_allow_html=True)
             
             if st.button("Sign In", type="primary", use_container_width=True):
                 if not email or not pwd: st.error("Please enter email and password.")
@@ -432,7 +477,7 @@ elif not st.session_state.logged_in:
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else: st.error("Invalid credentials")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_self" class="native-link">Sign Up</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_parent" class="native-link">Sign Up</a></div>', unsafe_allow_html=True)
 
         elif auth_view == "signup":
             st.markdown('<div class="title-text">Sign Up</div><div class="sub-text">Create an account to build your vault.</div>', unsafe_allow_html=True)
@@ -454,7 +499,7 @@ elif not st.session_state.logged_in:
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else: st.error("Email already registered.")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Already have an account?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Sign In</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Already have an account?</span> <a href="{get_nav_link("auth", "login")}" target="_parent" class="native-link">Sign In</a></div>', unsafe_allow_html=True)
 
         elif auth_view == "forgot":
             st.markdown('<div class="title-text">Forgot Password</div>', unsafe_allow_html=True)
@@ -487,7 +532,7 @@ elif not st.session_state.logged_in:
                             st.session_state.reset_step = 0; st.session_state.reset_email = ""
                             st.query_params["view"] = "login"; st.rerun()
                         else: st.error("Invalid token!")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Log In</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_parent" class="native-link">Log In</a></div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ================= DASHBOARD APP (LOGGED IN) =================
@@ -504,27 +549,24 @@ elif active_tab in ["drive", "profile"]:
         try: actual_folder_id = ObjectId(active_folder)
         except: actual_folder_id = root_folder["_id"] if root_folder else None
 
-    # --- 5-MINUTE STORY CACHE LOGIC ---
-    current_time = time.time()
-    if current_time - st.session_state.story_timestamp > 300: 
-        all_user_media = list(files_col.find({"username": st.session_state.username}))
-        if all_user_media:
-            random.shuffle(all_user_media)
-            st.session_state.story_sample = all_user_media[:6]
-        st.session_state.story_timestamp = current_time
-
     # --- SIDEBAR NAV ---
     st.sidebar.markdown('<div style="padding: 10px 10px 20px 10px;"><span style="font-weight: 800; font-size: 20px; color: var(--accent);">voidememo</span></div>', unsafe_allow_html=True)
     st.sidebar.markdown('<div class="muted-text" style="font-size: 12px; font-weight: 600; padding: 10px; margin-top: 10px;">Library</div>', unsafe_allow_html=True)
     
-    st.sidebar.markdown(f'<a href="{get_nav_link("app", tab="drive", folder="root")}" target="_self" class="sidebar-link">📸 Dashboard</a>', unsafe_allow_html=True)
-    st.sidebar.markdown(f'<a href="{get_nav_link("app", tab="profile")}" target="_self" class="sidebar-link">⚙️ Settings</a>', unsafe_allow_html=True)
+    st.sidebar.markdown(f'<a href="{get_nav_link("app", tab="drive", folder="root")}" target="_parent" class="sidebar-link">📸 Dashboard</a>', unsafe_allow_html=True)
+    st.sidebar.markdown(f'<a href="{get_nav_link("app", tab="profile")}" target="_parent" class="sidebar-link">⚙️ Settings</a>', unsafe_allow_html=True)
     
     st.sidebar.markdown('<div class="muted-text" style="font-size: 12px; font-weight: 600; padding: 10px; margin-top: 20px;">Albums</div>', unsafe_allow_html=True)
     all_folders = list(folders_col.find({"username": st.session_state.username}))
+    
     for f in all_folders:
         if f["folder_name"] != "root":
-            st.sidebar.markdown(f'<a href="{get_nav_link("app", tab="drive", folder=str(f["_id"]))}" target="_self" class="sidebar-link">📁 {f["folder_name"]}</a>', unsafe_allow_html=True)
+            folder_url = get_nav_link("app", tab="drive", folder=str(f["_id"]))
+            cover = f.get("cover_photo")
+            if cover:
+                st.sidebar.markdown(f'<a href="{folder_url}" target="_parent" class="sidebar-link"><img src="{cover}" style="width:24px; height:24px; border-radius:4px; object-fit:cover;"> {f["folder_name"]}</a>', unsafe_allow_html=True)
+            else:
+                st.sidebar.markdown(f'<a href="{folder_url}" target="_parent" class="sidebar-link">📁 {f["folder_name"]}</a>', unsafe_allow_html=True)
     
     st.sidebar.write("<br><br><br>", unsafe_allow_html=True)
     if st.sidebar.button("🚪 Logout", use_container_width=True):
@@ -545,26 +587,29 @@ elif active_tab in ["drive", "profile"]:
         # --- HEADER ---
         prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
         display_name = user_data.get("first_name", st.session_state.username)
+        prof_url = get_nav_link("app", tab="profile")
         
         c_title, c_prof = st.columns([4, 1])
         with c_title: st.markdown(f'<div class="dashboard-title">{"Albums" if is_root else current["folder_name"]}</div>', unsafe_allow_html=True)
-        with c_prof: st.markdown(f'<div style="display: flex; justify-content: flex-end;"><div class="profile-header-widget"><img src="{prof_pic}"><span>{display_name}</span></div></div>', unsafe_allow_html=True)
+        with c_prof: st.markdown(f'<div style="display: flex; justify-content: flex-end;"><a href="{prof_url}" target="_parent" style="text-decoration: none;"><div class="profile-header-widget"><img src="{prof_pic}"><span>{display_name}</span></div></a></div>', unsafe_allow_html=True)
 
-        # --- DYNAMIC STORIES ---
-        if is_root and st.session_state.story_sample:
+        # --- DYNAMIC STORIES (COLLECTIONS RENDERER) ---
+        if is_root and st.session_state.story_groups:
             story_html = '<div class="story-wrapper">'
             colors = ["linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%)", "var(--border)", "var(--accent)", "#34d399"]
             
-            for idx, media in enumerate(st.session_state.story_sample):
-                c = colors[idx % len(colors)]
-                label = "Highlights" if idx == 0 else f"Memory {idx+1}"
+            for g_idx, group in enumerate(st.session_state.story_groups):
+                if not group["items"]: continue
+                c = colors[g_idx % len(colors)]
+                first_media = group["items"][0]
                 
-                thumb_html = f'<img src="{media["url"]}">'
-                if media.get("resource_type") == "video":
-                    vid_thumb = media["url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
+                thumb_html = f'<img src="{first_media["url"]}">'
+                if first_media.get("resource_type") == "video":
+                    vid_thumb = first_media["url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                     thumb_html = f'<img src="{vid_thumb}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'">'
                 
-                story_html += f'<a href="{get_nav_link("app", tab="drive", folder="root", story_idx=idx)}" target="_self" class="story-link"><div class="story-item"><div class="story-ring" style="background: {c};"><div class="story-inner">{thumb_html}</div></div><div class="story-label">{label}</div></div></a>'
+                # Ensures exact navigation without losing state
+                story_html += f'<a href="{get_nav_link("app", tab="drive", folder="root", story_group=g_idx, story_idx=0)}" target="_parent" class="story-link"><div class="story-item"><div class="story-ring" style="background: {c};"><div class="story-inner">{thumb_html}</div></div><div class="story-label">{group["label"]}</div></div></a>'
             
             story_html += '</div>'
             st.markdown(story_html, unsafe_allow_html=True)
@@ -576,7 +621,7 @@ elif active_tab in ["drive", "profile"]:
             with menu_c1:
                 parent_id = current.get("parent_id")
                 target_back = str(parent_id) if parent_id else "root"
-                st.markdown(f'<a href="{get_nav_link("app", tab="drive", folder=target_back)}" target="_self" style="display:inline-block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; font-weight: 600;">⬅ Back to Albums</a>', unsafe_allow_html=True)
+                st.markdown(f'<a href="{get_nav_link("app", tab="drive", folder=target_back)}" target="_parent" style="display:inline-block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; font-weight: 600;">⬅ Back to Albums</a>', unsafe_allow_html=True)
             with menu_c2:
                 with st.popover("⋮ Options", use_container_width=True):
                     st.markdown("**Album Settings**")
@@ -624,20 +669,19 @@ elif active_tab in ["drive", "profile"]:
                     
                     if cover:
                         st.markdown(f"""
-                        <a href="{folder_url}" target="_self" class="album-link">
-                            <div style="margin-bottom: 15px;">
-                                <div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid var(--border); margin-bottom: 8px;">
+                        <a href="{folder_url}" target="_parent" class="album-link">
+                            <div style="margin-bottom: 15px; transition: transform 0.2s ease;" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+                                <div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid var(--border);">
                                     <img src="{cover}" style="width: 100%; height: 100%; object-fit: cover;">
                                 </div>
-                                <div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px;">{folder['folder_name']}</div>
                             </div>
                         </a>
                         """, unsafe_allow_html=True)
                     else:
                         st.markdown(f"""
-                        <a href="{folder_url}" target="_self" class="album-link">
+                        <a href="{folder_url}" target="_parent" class="album-link">
                             <div style="margin-bottom: 15px;">
-                                <div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; background-color: var(--bg-card); border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 8px; transition: transform 0.2s ease;">
+                                <div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; background-color: var(--bg-card); border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 8px; transition: transform 0.2s ease;" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
                                     <div style="font-size: 40px;">📁</div>
                                 </div>
                                 <div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px;">{folder['folder_name']}</div>
