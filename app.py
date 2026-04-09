@@ -13,6 +13,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import random
 import datetime
+import html
+import secrets 
 
 # ---------------- UI CONFIG ----------------
 st.set_page_config(page_title="voidememo Vault", page_icon="🌐", layout="wide", initial_sidebar_state="expanded")
@@ -33,22 +35,31 @@ cloudinary.config(
     api_secret=st.secrets["CLOUDINARY_API_SECRET"]
 )
 
-# ---------------- UTILS & AUTHENTICATION ----------------
+# ---------------- UTILS & SECURITY / AUTHENTICATION ----------------
 def hash_password(password):
-    return hashlib.sha256(password.strip().encode()).hexdigest()
+    pwd_str = str(password).strip()
+    pepper = st.secrets.get("APP_PEPPER", "")
+    return hashlib.sha256((pwd_str + pepper).encode()).hexdigest()
 
 def register(email, password, first_name, last_name, birthday):
+    email = str(email).strip().lower()
     if users_col.find_one({"email": email}): return False
     username = email.split('@')[0]
+    
+    safe_fname = html.escape(str(first_name).strip())
+    safe_lname = html.escape(str(last_name).strip())
+    safe_username = html.escape(username)
+    
     users_col.insert_one({
-        "username": username, "first_name": first_name, "last_name": last_name,
+        "username": safe_username, "first_name": safe_fname, "last_name": safe_lname,
         "birthday": str(birthday), "email": email, "password": hash_password(password),
-        "profile_photo": "", "bio": "", "session_token": "", "reset_otp": "" 
+        "profile_photo": "", "bio": "", "session_token": "", "reset_otp": "", "reset_otp_exp": 0
     })
-    folders_col.insert_one({"username": username, "folder_name": "root", "parent_id": None, "is_locked": False})
-    return username
+    folders_col.insert_one({"username": safe_username, "folder_name": "root", "parent_id": None, "is_locked": False})
+    return safe_username
 
 def login(email, password):
+    email = str(email).strip().lower()
     user = users_col.find_one({"email": email})
     if user and user["password"] == hash_password(password): return user["username"]
     return False
@@ -69,9 +80,9 @@ def send_otp_email(receiver_email, otp):
         sender_password = st.secrets["SMTP_PASSWORD"] 
         msg = MIMEMultipart()
         msg['From'] = sender_email
-        msg['To'] = receiver_email
-        msg['Subject'] = "voidememo - Password Reset"
-        body = f"Hello,\n\nYou have requested to reset your password. Your 6-digit code is: {otp}\n\nIf you did not request this, please ignore this email."
+        msg['To'] = str(receiver_email).strip()
+        msg['Subject'] = "voidememo - Password Reset Security Code"
+        body = f"Hello,\n\nYou requested a password reset. Your secure 6-digit code is: {otp}\n\nThis code will expire in 10 minutes. If you did not request this, secure your account immediately."
         msg.attach(MIMEText(body, 'plain'))
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -80,13 +91,13 @@ def send_otp_email(receiver_email, otp):
         server.quit()
         return True
     except Exception as e:
-        st.error(f"Failed to send email: {e}")
+        st.error("Failed to send secure email. Please try again later.")
         return False
 
 # ---------------- POPUP DIALOGS ----------------
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
-    st.write(f"Are you sure you want to completely delete the album **{folder_name}** and everything inside it?")
+    st.write(f"Are you sure you want to completely delete the album **{html.escape(folder_name)}** and everything inside it?")
     c1, c2 = st.columns(2)
     if c1.button("Yes, Delete It", type="primary", use_container_width=True):
         delete_folder_tree(folder_id)
@@ -100,8 +111,9 @@ def rename_folder_dialog(folder_id, current_name):
     new_name = st.text_input("Enter new album name:", value=current_name)
     c1, c2 = st.columns(2)
     if c1.button("Save Changes", type="primary", use_container_width=True):
-        if new_name.strip() and new_name.strip() != current_name:
-            folders_col.update_one({"_id": folder_id}, {"$set": {"folder_name": new_name.strip()}})
+        clean_name = str(new_name).strip()
+        if clean_name and clean_name != current_name:
+            folders_col.update_one({"_id": folder_id}, {"$set": {"folder_name": clean_name}})
         st.rerun()
     if c2.button("Cancel", use_container_width=True):
         st.rerun()
@@ -137,6 +149,8 @@ def render_story_dialog(group_idx, idx):
         
     current_group = groups[group_idx]
     current_story = current_group["items"][idx]
+    safe_label = html.escape(current_group['label'])
+    safe_url = html.escape(current_story["url"])
     
     st.markdown("""
     <style>
@@ -160,17 +174,17 @@ def render_story_dialog(group_idx, idx):
     </style>
     """, unsafe_allow_html=True)
     
-    st.markdown(f"<h4 style='text-align: center; margin-top: -5px; color: white !important; font-weight: 600; text-shadow: 0 2px 4px rgba(0,0,0,0.5);'>{current_group['label']}</h4>", unsafe_allow_html=True)
+    st.markdown(f"<h4 style='text-align: center; margin-top: -5px; color: white !important; font-weight: 600; text-shadow: 0 2px 4px rgba(0,0,0,0.5);'>{safe_label}</h4>", unsafe_allow_html=True)
     st.markdown('<div class="story-progress-bar"><div class="story-progress-fill"></div></div>', unsafe_allow_html=True)
     
     if current_story["resource_type"] == "image":
-        st.markdown(f'<div style="display:flex; justify-content:center;"><img src="{current_story["url"]}" style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);"></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="display:flex; justify-content:center;"><img src="{safe_url}" style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);"></div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div style="display:flex; justify-content:center;"><video src="{current_story["url"]}" autoplay muted playsinline style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);"></video></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="display:flex; justify-content:center;"><video src="{safe_url}" autoplay muted playsinline style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.3);"></video></div>', unsafe_allow_html=True)
         
     next_idx = idx + 1
     next_group_idx = group_idx + 1
-    session_token = st.query_params.get('session', '')
+    session_token = html.escape(st.query_params.get('session', ''))
     
     if next_idx < len(current_group["items"]):
         next_search = f"?page=app&tab=drive&folder=root&story_group={group_idx}&story_idx={next_idx}&session={session_token}"
@@ -200,7 +214,7 @@ def get_nav_link(page=None, view=None, tab=None, folder=None, story_group=None, 
     if story_idx is not None: params.append(f"story_idx={story_idx}")
     if lightbox_idx is not None: params.append(f"lightbox_idx={lightbox_idx}")
     if "session" in st.query_params:
-        params.append(f"session={st.query_params['session']}")
+        params.append(f"session={html.escape(st.query_params['session'])}")
     return "?" + "&".join(params)
 
 app_page = st.query_params.get("page", "landing")
@@ -217,7 +231,7 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 if not st.session_state.logged_in and "session" in st.query_params:
-    token = st.query_params["session"]
+    token = str(st.query_params["session"]).strip()
     user = users_col.find_one({"session_token": token})
     if user:
         st.session_state.logged_in = True
@@ -408,7 +422,12 @@ if "lightbox_idx" in st.query_params and st.session_state.logged_in:
     idx = int(st.query_params["lightbox_idx"])
     
     f_id = None if folder_id_str == "root" else ObjectId(folder_id_str)
-    files = list(files_col.find({"username": st.session_state.username, "folder_id": f_id}))
+    
+    # Fetch all files and perform the new PIN-SORTING logic exactly like the grid
+    files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": f_id}))
+    pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0))
+    unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
+    files = pinned_files + unpinned_files
     
     if not files or idx >= len(files):
         if "lightbox_idx" in st.query_params: del st.query_params["lightbox_idx"]
@@ -418,12 +437,14 @@ if "lightbox_idx" in st.query_params and st.session_state.logged_in:
     has_next = "true" if idx < len(files) - 1 else "false"
     has_prev = "true" if idx > 0 else "false"
     
-    session_token = st.query_params.get('session', '')
-    next_search = f"?page=app&tab=drive&folder={folder_id_str}&lightbox_idx={idx + 1}&session={session_token}"
-    prev_search = f"?page=app&tab=drive&folder={folder_id_str}&lightbox_idx={idx - 1}&session={session_token}"
-    close_search = f"?page=app&tab=drive&folder={folder_id_str}&session={session_token}"
+    session_token = html.escape(st.query_params.get('session', ''))
+    safe_folder_id = html.escape(folder_id_str)
+    next_search = f"?page=app&tab=drive&folder={safe_folder_id}&lightbox_idx={idx + 1}&session={session_token}"
+    prev_search = f"?page=app&tab=drive&folder={safe_folder_id}&lightbox_idx={idx - 1}&session={session_token}"
+    close_search = f"?page=app&tab=drive&folder={safe_folder_id}&session={session_token}"
+    safe_url = html.escape(file['url'])
 
-    media_element = f"<img src='{file['url']}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none;'>" if file['resource_type'] == "image" else f"<video src='{file['url']}' controls autoplay style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
+    media_element = f"<img src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     prev_button = f"<a href='{prev_search}' target='_parent' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_parent' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
@@ -560,11 +581,12 @@ if not st.session_state.logged_in:
                 
             cols = st.columns(4)
             for i, url in enumerate(urls_to_show):
-                random_date = f"202{random.randint(3,6)} Memory" 
+                random_date = f"202{random.randint(3,6)} Memory"
+                safe_url = html.escape(url)
                 with cols[i % 4]:
                     html_str = f"""
 <div style="margin-bottom: 20px; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); position: relative; cursor: pointer; background: #000;">
-<img src="{url}" style="width: 100%; height: auto; display: block; transition: transform 0.4s ease; opacity: 0.9;" onmouseover="this.style.transform='scale(1.08)'; this.style.opacity='1'" onmouseout="this.style.transform='scale(1)'; this.style.opacity='0.9'">
+<img src="{safe_url}" style="width: 100%; height: auto; display: block; transition: transform 0.4s ease; opacity: 0.9;" onmouseover="this.style.transform='scale(1.08)'; this.style.opacity='1'" onmouseout="this.style.transform='scale(1)'; this.style.opacity='0.9'">
 <div style="position: absolute; bottom: 0; width: 100%; background: linear-gradient(transparent, rgba(0,0,0,0.8)); padding: 15px 12px 10px 12px; pointer-events: none;">
 <div style="color: white; font-size: 14px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">Community Vault ✨</div>
 <div style="color: #e5e5ea; font-size: 11px; font-weight: 500;">{random_date}</div>
@@ -655,30 +677,32 @@ if not st.session_state.logged_in:
                 f_email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="f_email")
                 if st.button("Reset Password", type="primary", use_container_width=True):
                     if f_email:
-                        user = users_col.find_one({"email": f_email})
+                        clean_email = str(f_email).strip().lower()
+                        user = users_col.find_one({"email": clean_email})
                         if user:
                             with st.spinner("Sending OTP..."):
-                                otp = str(random.randint(100000, 999999))
-                                users_col.update_one({"email": f_email}, {"$set": {"reset_otp": otp}})
-                                if send_otp_email(f_email, otp):
-                                    st.session_state.reset_step = 1; st.session_state.reset_email = f_email; st.rerun()
+                                otp = str(secrets.randbelow(900000) + 100000)
+                                exp_time = time.time() + 600 # 10 minute expiration
+                                users_col.update_one({"email": clean_email}, {"$set": {"reset_otp": otp, "reset_otp_exp": exp_time}})
+                                if send_otp_email(clean_email, otp):
+                                    st.session_state.reset_step = 1; st.session_state.reset_email = clean_email; st.rerun()
                         else: st.error("No account found with that email.")
                         
             elif st.session_state.reset_step == 1:
                 st.markdown('<div class="sub-text">Enter the 6-digit code sent to your email</div>', unsafe_allow_html=True)
-                st.success(f"OTP sent to {st.session_state.reset_email}")
+                st.success(f"OTP sent to {html.escape(st.session_state.reset_email)}")
                 entered_otp = st.text_input("Enter 6-Digit OTP", placeholder="123456", label_visibility="collapsed", key="entered_otp")
                 new_pwd = st.text_input("Enter New Password", type="password", placeholder="New Password", label_visibility="collapsed", key="new_pwd")
                 if st.button("Confirm Reset", type="primary", use_container_width=True):
                     if len(new_pwd) < 6: st.error("Password must be at least 6 characters.")
                     else:
                         user = users_col.find_one({"email": st.session_state.reset_email})
-                        if user and user.get("reset_otp") == entered_otp:
-                            users_col.update_one({"email": st.session_state.reset_email}, {"$set": {"password": hash_password(new_pwd), "reset_otp": ""}})
+                        if user and user.get("reset_otp") == str(entered_otp).strip() and time.time() < user.get("reset_otp_exp", 0):
+                            users_col.update_one({"email": st.session_state.reset_email}, {"$set": {"password": hash_password(new_pwd), "reset_otp": "", "reset_otp_exp": 0}})
                             st.success("Password updated!"); time.sleep(1.5)
                             st.session_state.reset_step = 0; st.session_state.reset_email = ""
                             st.query_params["view"] = "login"; st.rerun()
-                        else: st.error("Invalid token!")
+                        else: st.error("Invalid or expired token!")
             st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_parent" class="native-link">Log In</a></div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -711,11 +735,13 @@ elif active_tab in ["drive", "profile"]:
             folder_url = get_nav_link("app", tab="drive", folder=str(f["_id"]))
             cover = f.get("cover_photo")
             lock_icon = "🔒" if f.get("is_locked") else ""
+            safe_fname = html.escape(f["folder_name"])
             
             if cover:
-                st.sidebar.markdown(f'<a href="{folder_url}" target="_parent" class="sidebar-link"><img src="{cover}" style="width:24px; height:24px; border-radius:4px; object-fit:cover;"> {f["folder_name"]} {lock_icon}</a>', unsafe_allow_html=True)
+                safe_cover = html.escape(cover)
+                st.sidebar.markdown(f'<a href="{folder_url}" target="_parent" class="sidebar-link"><img src="{safe_cover}" style="width:24px; height:24px; border-radius:4px; object-fit:cover;"> {safe_fname} {lock_icon}</a>', unsafe_allow_html=True)
             else:
-                st.sidebar.markdown(f'<a href="{folder_url}" target="_parent" class="sidebar-link">📁 {f["folder_name"]} {lock_icon}</a>', unsafe_allow_html=True)
+                st.sidebar.markdown(f'<a href="{folder_url}" target="_parent" class="sidebar-link">📁 {safe_fname} {lock_icon}</a>', unsafe_allow_html=True)
     
     st.sidebar.write("<br><br><br>", unsafe_allow_html=True)
     if st.sidebar.button("🚪 Logout", use_container_width=True):
@@ -735,15 +761,15 @@ elif active_tab in ["drive", "profile"]:
 
         # --- HEADER ---
         prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
-        display_name = user_data.get("first_name", st.session_state.username)
+        display_name = html.escape(user_data.get("first_name", st.session_state.username))
         prof_url = get_nav_link("app", tab="profile")
         
         c_title, c_prof = st.columns([4, 1])
-        title_text = "Albums" if is_root else current["folder_name"]
+        title_text = "Albums" if is_root else html.escape(current["folder_name"])
         if not is_root and current.get("is_locked"): title_text += " 🔒"
         
         with c_title: st.markdown(f'<div class="dashboard-title">{title_text}</div>', unsafe_allow_html=True)
-        with c_prof: st.markdown(f'<div style="display: flex; justify-content: flex-end;"><a href="{prof_url}" target="_parent" style="text-decoration: none;"><div class="profile-header-widget"><img src="{prof_pic}"><span>{display_name}</span></div></a></div>', unsafe_allow_html=True)
+        with c_prof: st.markdown(f'<div style="display: flex; justify-content: flex-end;"><a href="{prof_url}" target="_parent" style="text-decoration: none;"><div class="profile-header-widget"><img src="{html.escape(prof_pic)}"><span>{display_name}</span></div></a></div>', unsafe_allow_html=True)
 
         # --- DYNAMIC STORIES (COLLECTIONS RENDERER) ---
         if is_root and st.session_state.story_groups:
@@ -754,13 +780,15 @@ elif active_tab in ["drive", "profile"]:
                 if not group["items"]: continue
                 c = colors[g_idx % len(colors)]
                 first_media = group["items"][0]
+                safe_url = html.escape(first_media["url"])
+                safe_label = html.escape(group["label"])
                 
-                thumb_html = f'<img src="{first_media["url"]}">'
+                thumb_html = f'<img src="{safe_url}">'
                 if first_media.get("resource_type") == "video":
-                    vid_thumb = first_media["url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
+                    vid_thumb = safe_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                     thumb_html = f'<img src="{vid_thumb}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'">'
                 
-                story_html += f'<a href="{get_nav_link("app", tab="drive", folder="root", story_group=g_idx, story_idx=0)}" target="_parent" class="story-link"><div class="story-item"><div class="story-ring" style="background: {c};"><div class="story-inner">{thumb_html}</div></div><div class="story-label">{group["label"]}</div></div></a>'
+                story_html += f'<a href="{get_nav_link("app", tab="drive", folder="root", story_group=g_idx, story_idx=0)}" target="_parent" class="story-link"><div class="story-item"><div class="story-ring" style="background: {c};"><div class="story-inner">{thumb_html}</div></div><div class="story-label">{safe_label}</div></div></a>'
             
             story_html += '</div>'
             st.markdown(story_html, unsafe_allow_html=True)
@@ -803,8 +831,9 @@ elif active_tab in ["drive", "profile"]:
                                     file_size_mb = file.size / (1024 * 1024)
                                     try:
                                         res = cloudinary.uploader.upload_large(file, resource_type=r_type, chunk_size=20000000) if file_size_mb > 50 else cloudinary.uploader.upload(file, resource_type=r_type)
-                                        files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": file.name, "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "tag": "", "tag_time": 0})
-                                    except Exception as e: st.error(f"Failed to upload {file.name}.")
+                                        safe_filename = html.escape(file.name)
+                                        files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": safe_filename, "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "tag": "", "tag_time": 0})
+                                    except Exception as e: st.error(f"Failed to upload {html.escape(file.name)}.")
                             st.session_state.uploader_key += 1; st.rerun()
 
         # --- CREATE NEW ALBUM (Only in Root) ---
@@ -812,14 +841,20 @@ elif active_tab in ["drive", "profile"]:
             with st.expander("➕ Create New Album"):
                 new_folder = st.text_input("New Album", placeholder="Album Name...", label_visibility="collapsed", key=f"folder_input_{st.session_state.folder_key}")
                 if st.button("Create Album", type="primary"):
-                    if new_folder:
-                        folders_col.insert_one({"username": st.session_state.username, "folder_name": new_folder, "parent_id": actual_folder_id, "cover_photo": "", "is_locked": False})
+                    clean_folder_name = str(new_folder).strip()
+                    if clean_folder_name:
+                        folders_col.insert_one({"username": st.session_state.username, "folder_name": clean_folder_name, "parent_id": actual_folder_id, "cover_photo": "", "is_locked": False})
                         st.session_state.folder_key += 1; st.rerun()
             st.write("<br>", unsafe_allow_html=True)
 
         # --- CONTENT GRID (ALBUMS & MEDIA) ---
         folders = list(folders_col.find({"username": st.session_state.username, "parent_id": actual_folder_id}))
-        files = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
+        
+        # PIN-SORTING LOGIC FOR FOLDER VIEW
+        files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
+        pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0))
+        unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
+        files = pinned_files + unpinned_files
         
         if not folders and not files:
             st.markdown('<p class="muted-text" style="text-align:center; margin-top: 50px;">This album is empty.</p>', unsafe_allow_html=True)
@@ -832,16 +867,18 @@ elif active_tab in ["drive", "profile"]:
                     cover = folder.get("cover_photo")
                     folder_url = get_nav_link("app", tab="drive", folder=str(folder["_id"]))
                     lock_indicator = '<div style="position:absolute; top:8px; right:8px; font-size:16px; background: rgba(0,0,0,0.5); padding: 4px; border-radius: 50%;">🔒</div>' if folder.get("is_locked") else ""
+                    safe_fname = html.escape(folder['folder_name'])
                     
                     if cover:
+                        safe_cover = html.escape(cover)
                         html_str = f"""
 <a href="{folder_url}" target="_parent" class="album-link" style="text-decoration: none;">
 <div style="margin-bottom: 15px; transition: transform 0.2s ease; position: relative;" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
 <div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid var(--border);">
 {lock_indicator}
-<img src="{cover}" style="width: 100%; height: 100%; object-fit: cover;">
+<img src="{safe_cover}" style="width: 100%; height: 100%; object-fit: cover;">
 </div>
-<div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{folder['folder_name']}</div>
+<div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div>
 </div>
 </a>
 """
@@ -854,7 +891,7 @@ elif active_tab in ["drive", "profile"]:
 {lock_indicator}
 <div style="font-size: 40px;">📁</div>
 </div>
-<div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{folder['folder_name']}</div>
+<div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div>
 </div>
 </a>
 """
@@ -867,23 +904,46 @@ elif active_tab in ["drive", "profile"]:
                 with img_cols[i % 4]:
                     st.markdown('<div class="media-container-wrapper">', unsafe_allow_html=True)
                     
-                    emoji_badge = f'<div style="position:absolute; top:8px; left:8px; font-size:20px; z-index:10; background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(5px); padding: 4px 8px; border-radius: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: none;">{file["tag"]}</div>' if file.get("tag") else ""
+                    safe_tag = html.escape(file.get("tag", ""))
+                    emoji_badge = f'<div style="position:absolute; top:8px; left:8px; font-size:20px; z-index:10; background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(5px); padding: 4px 8px; border-radius: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: none;">{safe_tag}</div>' if safe_tag else ""
                     
-                    session_token = st.query_params.get('session', '')
+                    pin_badge = '<div style="position:absolute; top:8px; right:45px; font-size:18px; z-index:10; text-shadow: 0 2px 4px rgba(0,0,0,0.5); pointer-events: none;">📌</div>' if file.get("pin_order", 0) > 0 else ""
+                    
+                    session_token = html.escape(st.query_params.get('session', ''))
                     lb_url = f"?page=app&tab=drive&folder={str(actual_folder_id) if actual_folder_id else 'root'}&lightbox_idx={i}&session={session_token}"
+                    safe_url = html.escape(file["url"])
                     
                     media_html = f'<a href="{lb_url}" target="_parent" style="text-decoration:none;">'
                     if file["resource_type"] == "image":
-                        media_html += f'<div class="square-media">{emoji_badge}<img src="{file["url"]}"></div>'
+                        media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
                     else:
-                        vid_thumb = file["url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                        media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}<img src="{vid_thumb}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'
+                        # NEW: Autoplay loop cinematic videos on folder view
+                        media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;"></video></div>'
                     media_html += '</a>'
                     st.markdown(media_html.strip(), unsafe_allow_html=True)
 
                     with st.popover("⋮"):
                         st.markdown("**Actions**")
-                        st.markdown(f'<a href="{file["url"]}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
+                        
+                        # --- PIN PHOTO ENGINE ---
+                        if file.get("pin_order", 0) > 0:
+                            # Instant Rerun triggers automatic menu closure
+                            if st.button("📌 Unpin Photo", key=f"unpin_{file['_id']}", use_container_width=True):
+                                files_col.update_one({"_id": file["_id"]}, {"$unset": {"pin_order": ""}})
+                                # Re-balance the serial sequence for remaining pinned photos
+                                remaining_pins = list(files_col.find({"folder_id": actual_folder_id, "pin_order": {"$exists": True}}).sort("pin_order", 1))
+                                for r_idx, r_file in enumerate(remaining_pins):
+                                    files_col.update_one({"_id": r_file["_id"]}, {"$set": {"pin_order": r_idx + 1}})
+                                st.rerun()
+                        else:
+                            if st.button("📌 Pin Photo", key=f"pin_{file['_id']}", use_container_width=True):
+                                max_pin = files_col.find_one({"folder_id": actual_folder_id, "pin_order": {"$exists": True}}, sort=[("pin_order", -1)])
+                                next_pin = (max_pin.get("pin_order", 0) if max_pin else 0) + 1
+                                files_col.update_one({"_id": file["_id"]}, {"$set": {"pin_order": next_pin}})
+                                st.rerun()
+                                
+                        st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+                        st.markdown(f'<a href="{safe_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
                         
                         if not is_root:
                             if st.button("🖼️ Set Cover", key=f"cov_{file['_id']}", use_container_width=True):
@@ -902,7 +962,7 @@ elif active_tab in ["drive", "profile"]:
                         is_locked = bool(file.get("tag")) and (time_elapsed < 86400) 
                         
                         if is_locked:
-                            if st.button(f"🔒 Locked ({file['tag']})", key=f"lock_{file['_id']}", use_container_width=True):
+                            if st.button(f"🔒 Locked ({safe_tag})", key=f"lock_{file['_id']}", use_container_width=True):
                                 locked_reaction_dialog(86400 - time_elapsed)
                         else:
                             e_cols = st.columns(4)
@@ -929,20 +989,23 @@ elif active_tab in ["drive", "profile"]:
             pic = st.file_uploader("Profile Photo", key="profile_pic_upload")
             
             if st.button("Save Changes", type="primary"):
-                updates = {"bio": bio, "email": new_email}
+                safe_bio = html.escape(str(bio).strip())
+                clean_email = str(new_email).strip().lower()
+                updates = {"bio": safe_bio, "email": clean_email}
                 if pic:
                     res = cloudinary.uploader.upload(pic)
                     updates["profile_photo"] = res["secure_url"]
                     
-                if new_username != st.session_state.username:
-                    if users_col.find_one({"username": new_username}):
+                clean_username = html.escape(str(new_username).strip())
+                if clean_username != st.session_state.username:
+                    if users_col.find_one({"username": clean_username}):
                         st.error("Username already taken.")
                     else:
-                        updates["username"] = new_username
+                        updates["username"] = clean_username
                         users_col.update_one({"username": st.session_state.username}, {"$set": updates})
-                        folders_col.update_many({"username": st.session_state.username}, {"$set": {"username": new_username}})
-                        files_col.update_many({"username": st.session_state.username}, {"$set": {"username": new_username}})
-                        st.session_state.username = new_username
+                        folders_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
+                        files_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
+                        st.session_state.username = clean_username
                         st.success("Profile and Username Updated!"); time.sleep(1); st.rerun()
                 else:
                     users_col.update_one({"username": st.session_state.username}, {"$set": updates})
@@ -965,7 +1028,8 @@ elif active_tab in ["drive", "profile"]:
             if stats:
                 scols = st.columns(2)
                 for i, stat in enumerate(stats):
-                    scols[i % 2].metric(label="React", value=stat["_id"], delta=f"{stat['count']} times")
+                    safe_stat_id = html.escape(stat["_id"])
+                    scols[i % 2].metric(label="React", value=safe_stat_id, delta=f"{stat['count']} times")
             else:
                 st.info("You haven't reacted to any memories yet!")
             st.markdown("</div>", unsafe_allow_html=True)
