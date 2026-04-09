@@ -439,7 +439,7 @@ if st.session_state.logged_in:
     random.seed() 
 
 
-# ================= CORE CSS =================
+# ================= CORE CSS & RESPONSIVENESS FIXES =================
 def inject_global_css():
     css = """
     <style>
@@ -457,14 +457,10 @@ def inject_global_css():
     p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
     
     /* ABSOLUTE MOBILE TOUCH OVERRIDE: Destroy Streamlit's invisible shields */
-    header[data-testid="stHeader"] { display: none !important; opacity: 0 !important; pointer-events: none !important; height: 0 !important; }
-    div[data-testid="stToolbar"] { display: none !important; pointer-events: none !important; }
-    div[data-testid="stDecoration"] { display: none !important; pointer-events: none !important; }
+    header[data-testid="stHeader"], div[data-testid="stToolbar"], div[data-testid="stDecoration"] { 
+        display: none !important; opacity: 0 !important; pointer-events: none !important; height: 0 !important; 
+    }
     #MainMenu { visibility: hidden; } .stDeployButton { display: none !important; }
-    
-    /* Ensure content is always interactable */
-    div[data-testid="stAppViewBlockContainer"] { z-index: 10 !important; padding-top: 1rem !important; }
-    div[data-testid="stMarkdownContainer"] { position: relative; z-index: 50; pointer-events: auto !important; }
 
     .title-text { color: var(--text-primary) !important; font-weight: 800; font-size: 32px; text-align: center; margin-bottom: 5px; }
     .sub-text { color: var(--text-secondary) !important; font-size: 15px; text-align: center; margin-bottom: 30px; }
@@ -474,6 +470,7 @@ def inject_global_css():
     .auth-container, .content-card {
         max-width: 480px !important; width: 90% !important; background-color: var(--bg-card) !important;
         padding: 50px 40px !important; border-radius: 20px !important; border: 1px solid var(--border) !important; margin: 8vh auto !important; 
+        position: relative; z-index: 10;
     }
     .content-card { max-width: 800px !important; }
     .stTextInput div[data-baseweb="input"], .stDateInput div[data-baseweb="input"], .stTextArea div[data-baseweb="textarea"] {
@@ -490,10 +487,13 @@ def inject_global_css():
     }
     .native-link { color: var(--accent) !important; text-decoration: none; font-weight: 600; cursor: pointer;} .native-link:hover { text-decoration: underline; }
     
-    .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 999999; }
-    .nav-links { display: flex; gap: 20px; align-items: center; position: relative; z-index: 999999; }
-    .nav-links a { color: var(--text-primary) !important; text-decoration: none; font-weight: 500; font-size: 15px; position: relative; z-index: 999999; cursor: pointer; }
+    /* NAV & HEADER CLEANUP */
+    .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; border-bottom: 1px solid var(--border); margin-bottom: 30px; }
+    .nav-links { display: flex; gap: 20px; align-items: center; }
+    .nav-links a { color: var(--text-primary) !important; text-decoration: none; font-weight: 600; font-size: 16px; cursor: pointer; }
     .nav-links a:hover { color: var(--accent) !important; }
+    .btn-primary-link { background: var(--accent); color: #ffffff !important; padding: 10px 24px; border-radius: 50px; text-decoration: none; font-weight: 600; }
+    .btn-primary-link:hover { opacity: 0.9; }
 
     .sidebar-link {
         display: flex; align-items: center; gap: 10px; background: transparent; color: var(--text-primary) !important;
@@ -505,6 +505,15 @@ def inject_global_css():
     .dashboard-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;}
     .dashboard-title { font-size: 32px; font-weight: 800; color: var(--text-primary); }
     
+    /* PROFESSIONAL MASONRY GALLERY */
+    .masonry-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; padding: 10px 0 40px 0; }
+    .gallery-item { position: relative; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); background: #000; aspect-ratio: 4/5; }
+    .gallery-item img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.4s ease; opacity: 0.9; }
+    .gallery-item:hover img { transform: scale(1.08); opacity: 1; }
+    .gallery-overlay { position: absolute; bottom: 0; left: 0; width: 100%; background: linear-gradient(transparent, rgba(0,0,0,0.8)); padding: 20px 15px 15px 15px; pointer-events: none; }
+    .gallery-title { color: white; font-size: 15px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+    .gallery-date { color: #e5e5ea; font-size: 12px; font-weight: 500; }
+
     .story-wrapper { display: flex; overflow-x: auto; gap: 15px; padding: 10px 0 20px 0; margin-bottom: 10px; }
     .story-wrapper::-webkit-scrollbar { display: none; }
     .story-link { text-decoration: none; display: inline-block; }
@@ -569,12 +578,14 @@ def inject_global_css():
 
     /* MASSIVE MOBILE TOUCH OVERHAUL */
     @media (max-width: 768px) {
-        .auth-container, .content-card { border: none !important; border-radius: 0 !important; padding: 30px 20px !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; pointer-events: auto !important;}
-        .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; z-index: 999999 !important; pointer-events: auto !important;}
-        .nav-links { gap: 15px; flex-wrap: wrap; justify-content: center; width: 100%; z-index: 999999 !important; pointer-events: auto !important;}
-        /* Convert links to large touch targets on mobile */
-        .nav-links a { font-size: 16px; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; flex: 1; min-width: 80px; font-weight: 600; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-        .brand-logo { font-size: 28px; margin-bottom: 10px;}
+        .auth-container, .content-card { border: none !important; border-radius: 0 !important; padding: 30px 20px !important; margin: 0 !important; width: 100% !important; max-width: 100% !important;}
+        .top-nav { flex-direction: column; gap: 20px; padding: 20px 0; border-bottom: none; margin-bottom: 10px;}
+        .nav-links { width: 100%; justify-content: space-around; flex-wrap: wrap; gap: 15px;}
+        .nav-links a { font-size: 14px; background: var(--bg-card); padding: 10px 15px; border-radius: 8px; flex: 1; text-align: center; border: 1px solid var(--border); }
+        .btn-primary-link { border: none !important; }
+        .brand-logo { font-size: 32px; }
+        .masonry-gallery { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 5px; }
+        .gallery-title { font-size: 13px; }
         .block-container { padding-top: 1rem !important; } 
     }
     </style>
@@ -626,24 +637,17 @@ if "lightbox_idx" in st.query_params and st.session_state.logged_in:
     prev_button = f"<a href='{prev_search}' target='_parent' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_parent' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # Formatted exactly to prevent Markdown parser bleeding
+    # Flattened UI String protects against markdown parser bleed
     lightbox_ui = f"""
 <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 9999999; display: flex; align-items: center; justify-content: center;">
 <style>
-.liquid-btn {{
-position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%;
-background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none;
-box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); transition: all 0.3s ease; cursor: pointer; z-index: 10000000;
-}}
+.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); transition: all 0.3s ease; cursor: pointer; z-index: 10000000; }}
 .liquid-btn:hover {{ background: rgba(255, 255, 255, 0.3); transform: scale(1.1); box-shadow: 0 8px 32px rgba(255, 255, 255, 0.2); color: white; }}
 </style>
 <a href="{close_search}" target="_parent" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>
 {prev_button}
 {next_button}
-<div style="position: absolute; bottom: 30px; color: white; font-family: sans-serif; font-size: 15px; font-weight: 600; background: rgba(255,255,255,0.15); padding: 8px 24px; border-radius: 30px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); letter-spacing: 1px; z-index: 10000000;">
-{idx + 1} / {len(files)}
-</div>
+<div style="position: absolute; bottom: 30px; color: white; font-family: sans-serif; font-size: 15px; font-weight: 600; background: rgba(255,255,255,0.15); padding: 8px 24px; border-radius: 30px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); letter-spacing: 1px; z-index: 10000000;">{idx + 1} / {len(files)}</div>
 {media_element}
 </div>
 """
@@ -685,21 +689,21 @@ if not st.session_state.logged_in:
     if app_page != "auth":
         st.markdown(f"""
         <div class="top-nav">
-            <a href="{get_nav_link('landing')}" target="_parent" class="brand-logo">voidememo</a>
+            <a href="{get_nav_link('landing')}" target="_self" class="brand-logo">voidememo</a>
             <div class="nav-links">
-                <a href="{get_nav_link('landing')}" target="_parent">Home</a>
-                <a href="{get_nav_link('policy')}" target="_parent">Policy</a>
-                <a href="{get_nav_link('auth', 'login')}" target="_parent" style="color: var(--accent) !important; font-weight: 700;">Log In</a>
+                <a href="{get_nav_link('landing')}" target="_self">Home</a>
+                <a href="{get_nav_link('policy')}" target="_self">Policy</a>
+                <a href="{get_nav_link('auth', 'login')}" target="_self">Log In</a>
+                <a href="{get_nav_link('auth', 'signup')}" target="_self" class="btn-primary-link">Create Vault</a>
             </div>
         </div>
-        <hr style='margin: 0; border-color: var(--border);'>
         """, unsafe_allow_html=True)
 
         if app_page == "landing":
-            st.markdown('<div class="title-text" style="font-size: 3.5rem; margin-top: 4rem;">Secure Your Memories</div>', unsafe_allow_html=True)
-            st.markdown('<div class="sub-text" style="font-size: 1.25rem; max-width: 600px; margin: 0 auto 3rem auto;">Your personal digital bibliotheca. Access, organize, and protect your media with absolute privacy.</div>', unsafe_allow_html=True)
-            st.markdown(f'<div style="text-align: center;"><a href="{get_nav_link("auth", "signup")}" target="_parent" style="background: var(--accent); color: #ffffff; padding: 14px 30px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 16px; display: inline-block;">Create Free Vault</a></div>', unsafe_allow_html=True)
-            st.write("<br><br><br><h3 style='text-align: center; margin-bottom: 30px;'>Community Vault Gallery</h3>", unsafe_allow_html=True)
+            st.markdown('<div class="title-text" style="font-size: 3.5rem; margin-top: 2rem;">Secure Your Memories</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sub-text" style="font-size: 1.25rem; max-width: 600px; margin: 0 auto 2rem auto;">Your personal digital bibliotheca. Access, organize, and protect your media with absolute privacy.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-bottom: 40px;"><a href="{get_nav_link("auth", "signup")}" target="_self" class="btn-primary-link" style="font-size: 18px; padding: 15px 40px;">Create Free Vault</a></div>', unsafe_allow_html=True)
+            st.write("<h3 style='text-align: center; margin-bottom: 20px;'>Community Vault Gallery</h3>", unsafe_allow_html=True)
             
             pipeline = [
                 {"$match": {"resource_type": "image"}},
@@ -729,21 +733,22 @@ if not st.session_state.logged_in:
             while len(urls_to_show) < 20:
                 urls_to_show.append(random.choice(fallback_urls))
                 
-            cols = st.columns(4)
-            for i, url in enumerate(urls_to_show):
+            # TRUE CSS MASONRY GRID - NO ST.COLUMNS MESS
+            gallery_html = '<div class="masonry-gallery">'
+            for url in urls_to_show:
                 random_date = f"202{random.randint(3,6)} Memory"
                 safe_url = html.escape(url)
-                with cols[i % 4]:
-                    html_str = f"""
-<div style="margin-bottom: 20px; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); position: relative; cursor: pointer; background: #000;">
-<img src="{safe_url}" style="width: 100%; height: auto; display: block; transition: transform 0.4s ease; opacity: 0.9;" onmouseover="this.style.transform='scale(1.08)'; this.style.opacity='1'" onmouseout="this.style.transform='scale(1)'; this.style.opacity='0.9'">
-<div style="position: absolute; bottom: 0; width: 100%; background: linear-gradient(transparent, rgba(0,0,0,0.8)); padding: 15px 12px 10px 12px; pointer-events: none;">
-<div style="color: white; font-size: 14px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">Community Vault ✨</div>
-<div style="color: #e5e5ea; font-size: 11px; font-weight: 500;">{random_date}</div>
+                gallery_html += f'''
+<div class="gallery-item">
+<img src="{safe_url}" loading="lazy">
+<div class="gallery-overlay">
+<div class="gallery-title">Community Vault ✨</div>
+<div class="gallery-date">{random_date}</div>
 </div>
 </div>
-"""
-                    st.markdown(html_str.strip(), unsafe_allow_html=True)
+'''
+            gallery_html += '</div>'
+            st.markdown(gallery_html.strip(), unsafe_allow_html=True)
             
         elif app_page == "policy":
             st.markdown("""
@@ -782,7 +787,7 @@ if not st.session_state.logged_in:
             st.markdown('<div class="title-text">Welcome Back</div><div class="sub-text">Please enter your credentials to log in</div>', unsafe_allow_html=True)
             email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="l_email")
             pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="l_pwd")
-            st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_parent" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_self" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>', unsafe_allow_html=True)
             
             if st.button("Sign In", type="primary", use_container_width=True):
                 if not email or not pwd: st.error("Please enter email and password.")
@@ -796,7 +801,7 @@ if not st.session_state.logged_in:
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else: st.error("Invalid credentials")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_parent" class="native-link">Sign Up</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_self" class="native-link">Sign Up</a></div>', unsafe_allow_html=True)
 
         elif auth_view == "signup":
             st.markdown('<div class="title-text">Sign Up</div><div class="sub-text">Create an account to build your vault.</div>', unsafe_allow_html=True)
@@ -819,7 +824,7 @@ if not st.session_state.logged_in:
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else: st.error("Email already registered.")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Already have an account?</span> <a href="{get_nav_link("auth", "login")}" target="_parent" class="native-link">Sign In</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Already have an account?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Sign In</a></div>', unsafe_allow_html=True)
 
         elif auth_view == "forgot":
             st.markdown('<div class="title-text">Forgot Password</div>', unsafe_allow_html=True)
@@ -854,7 +859,7 @@ if not st.session_state.logged_in:
                             st.session_state.reset_step = 0; st.session_state.reset_email = ""
                             st.query_params["view"] = "login"; st.rerun()
                         else: st.error("Invalid or expired token!")
-            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_parent" class="native-link">Log In</a></div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Log In</a></div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ================= DASHBOARD APP (LOGGED IN) =================
@@ -927,11 +932,10 @@ elif active_tab in ["drive", "profile"]:
                 notif_dot_html = '<div class="profile-notif-dot"></div>' if unread_notifs else ''
                 notif_link = get_nav_link(page="app", tab="drive", folder=actual_folder_id, notif_hub=1)
                 
-                # Single-line HTML to absolutely prevent markdown bleeding
-                profile_html = f'<a href="{notif_link}" target="_parent" class="profile-header-widget"><img src="{html.escape(prof_pic)}"><span>{display_name}</span>{notif_dot_html}</a>'
+                profile_html = f'<a href="{notif_link}" target="_parent" class="profile-header-widget" style="text-decoration:none;"><img src="{html.escape(prof_pic)}"><span>{display_name}</span>{notif_dot_html}</a>'
                 st.markdown(profile_html, unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
-        # FOLDER VIEW: Removes Profile to prevent clutter, moves everything cleanly inside 3-dots
+        # FOLDER VIEW: Only Options Menu, NO Profile widget
         else:
             c_title, c_opt = st.columns([5, 2])
             with c_title: 
@@ -1029,7 +1033,6 @@ elif active_tab in ["drive", "profile"]:
                     
                     if cover:
                         safe_cover = html.escape(cover)
-                        # Flattened string prevents parser bleed
                         html_str = f'<a href="{folder_url}" target="_parent" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px; transition: transform 0.2s ease; position: relative;" onmouseover="this.style.transform=\'scale(1.02)\'" onmouseout="this.style.transform=\'scale(1)\'"><div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid var(--border);">{lock_indicator}<img src="{safe_cover}" style="width: 100%; height: 100%; object-fit: cover;"></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                         st.markdown(html_str, unsafe_allow_html=True)
                     else:
