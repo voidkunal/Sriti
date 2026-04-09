@@ -28,6 +28,8 @@ db = client["memory_vault"]
 users_col = db["users"]
 files_col = db["files"]
 folders_col = db["folders"]
+shares_col = db["shares"]             
+notifications_col = db["notifications"] 
 
 cloudinary.config(
     cloud_name=st.secrets["CLOUDINARY_CLOUD_NAME"],
@@ -41,7 +43,7 @@ def hash_password(password):
     pepper = st.secrets.get("APP_PEPPER", "")
     return hashlib.sha256((pwd_str + pepper).encode()).hexdigest()
 
-def register(email, password, first_name, last_name, birthday):
+def register(email, password, first_name, last_name, birthday, pin_code):
     email = str(email).strip().lower()
     if users_col.find_one({"email": email}): return False
     username = email.split('@')[0]
@@ -49,10 +51,12 @@ def register(email, password, first_name, last_name, birthday):
     safe_fname = html.escape(str(first_name).strip())
     safe_lname = html.escape(str(last_name).strip())
     safe_username = html.escape(username)
+    safe_pin = html.escape(str(pin_code).strip())
     
     users_col.insert_one({
         "username": safe_username, "first_name": safe_fname, "last_name": safe_lname,
         "birthday": str(birthday), "email": email, "password": hash_password(password),
+        "pin_code": safe_pin, 
         "profile_photo": "", "bio": "", "session_token": "", "reset_otp": "", "reset_otp_exp": 0
     })
     folders_col.insert_one({"username": safe_username, "folder_name": "root", "parent_id": None, "is_locked": False})
@@ -70,7 +74,8 @@ def delete_folder_tree(folder_id):
         delete_folder_tree(sub["_id"])
     files = list(files_col.find({"folder_id": folder_id}))
     for f in files:
-        cloudinary.uploader.destroy(f["public_id"], resource_type=f["resource_type"])
+        if files_col.count_documents({"public_id": f["public_id"]}) <= 1:
+            cloudinary.uploader.destroy(f["public_id"], resource_type=f["resource_type"])
     files_col.delete_many({"folder_id": folder_id})
     folders_col.delete_one({"_id": folder_id})
 
@@ -94,7 +99,7 @@ def send_otp_email(receiver_email, otp):
         st.error("Failed to send secure email. Please try again later.")
         return False
 
-# ---------------- POPUP DIALOGS ----------------
+# ---------------- POPUP DIALOGS & SHARING ENGINE ----------------
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
     st.write(f"Are you sure you want to completely delete the album **{html.escape(folder_name)}** and everything inside it?")
@@ -123,7 +128,8 @@ def delete_file_dialog(file_id, public_id, resource_type):
     st.write("Are you sure you want to delete this media?")
     c1, c2 = st.columns(2)
     if c1.button("Yes, Delete It", type="primary", use_container_width=True):
-        cloudinary.uploader.destroy(public_id, resource_type=resource_type)
+        if files_col.count_documents({"public_id": public_id}) <= 1:
+            cloudinary.uploader.destroy(public_id, resource_type=resource_type)
         files_col.delete_one({"_id": file_id})
         st.rerun()
     if c2.button("No, Cancel", use_container_width=True):
@@ -138,10 +144,125 @@ def locked_reaction_dialog(remaining_seconds):
     if st.button("Got it", use_container_width=True):
         st.rerun()
 
+@st.dialog("🔗 Share Media")
+def share_media_dialog(media_id_str):
+    media_id = ObjectId(media_id_str)
+    curr_user = users_col.find_one({"username": st.session_state.username})
+    user_pin = curr_user.get("pin_code", "")
+    
+    st.markdown("Select users to securely share this memory with.")
+    tab_n, tab_s = st.tabs(["📍 Nearby Users", "🔍 Search Global"])
+    
+    selected_users = []
+    
+    with tab_n:
+        nearby_users = list(users_col.find({"pin_code": user_pin, "username": {"$ne": st.session_state.username}}))
+        if nearby_users:
+            options = [u["username"] for u in nearby_users]
+            sel_n = st.multiselect("Users in your area (Same PIN)", options, key="ms_nearby")
+            selected_users.extend(sel_n)
+        else:
+            st.info("No users found with your PIN code.")
+            
+    with tab_s:
+        sq = st.text_input("Search by username", key="search_user_input")
+        if sq:
+            s_res = list(users_col.find({"username": {"$regex": sq, "$options": "i"}, "username": {"$ne": st.session_state.username}}))
+            s_opts = [u["username"] for u in s_res]
+            sel_s = st.multiselect("Search Results", s_opts, key="ms_search")
+            selected_users.extend(sel_s)
+            
+    final_selection = list(set(selected_users))
+    
+    st.write("<br>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    if c1.button(f"Send to {len(final_selection)} users", type="primary", disabled=len(final_selection)==0, use_container_width=True):
+        for u in final_selection:
+            if shares_col.find_one({"sender": st.session_state.username, "receiver": u, "media_id": media_id}): continue
+                
+            share_res = shares_col.insert_one({
+                "sender": st.session_state.username, "receiver": u, "media_id": media_id, "created_at": time.time(), "is_seen": False
+            })
+            notifications_col.insert_one({
+                "username": u, "sender": st.session_state.username, "type": "share", "share_id": share_res.inserted_id,
+                "message": f"shared a memory with you.", "is_read": False, "created_at": time.time()
+            })
+            
+        st.success("Shared successfully!")
+        time.sleep(1)
+        del st.query_params["share_media"]
+        st.rerun()
+        
+    if c2.button("Cancel", use_container_width=True):
+        del st.query_params["share_media"]
+        st.rerun()
+
+@st.dialog("📬 Shared Media Preview", width="large")
+def preview_shared_dialog(notif_id_str):
+    notif = notifications_col.find_one({"_id": ObjectId(notif_id_str)})
+    if not notif:
+        st.error("Notification not found.")
+        if st.button("Close"): del st.query_params["preview_notif"]; st.rerun()
+        return
+        
+    share = shares_col.find_one({"_id": notif.get("share_id")})
+    if not share:
+        st.error("Shared media no longer exists.")
+        if st.button("Close"): del st.query_params["preview_notif"]; st.rerun()
+        return
+        
+    media = files_col.find_one({"_id": share.get("media_id")})
+    if not media:
+        st.error("Media file was deleted by the owner.")
+        if st.button("Close"): del st.query_params["preview_notif"]; st.rerun()
+        return
+        
+    st.markdown(f"**From:** {html.escape(notif['sender'])}")
+    safe_url = html.escape(media["url"])
+    
+    if media["resource_type"] == "image":
+        st.markdown(f'<div style="display:flex; justify-content:center;"><img src="{safe_url}" style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px;"></div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div style="display:flex; justify-content:center;"><video src="{safe_url}" controls autoplay style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 12px;"></video></div>', unsafe_allow_html=True)
+        
+    st.write("<br>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    if c1.button("📥 Save to Album", type="primary", use_container_width=True):
+        root = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
+        root_id = root["_id"] if root else None
+        
+        f_name = "Shared Images" if media["resource_type"] == "image" else "Shared Videos"
+        folder = folders_col.find_one({"username": st.session_state.username, "folder_name": f_name, "parent_id": root_id})
+        
+        if not folder:
+            res = folders_col.insert_one({"username": st.session_state.username, "folder_name": f_name, "parent_id": root_id, "cover_photo": "", "is_locked": False})
+            dest_f_id = res.inserted_id
+        else:
+            dest_f_id = folder["_id"]
+            
+        new_file = {
+            "username": st.session_state.username, "folder_id": dest_f_id,
+            "filename": f"Shared from {notif['sender']} - {media.get('filename','media')}",
+            "url": media["url"], "public_id": media["public_id"], "resource_type": media["resource_type"],
+            "tag": "", "tag_time": 0
+        }
+        files_col.insert_one(new_file)
+        notifications_col.update_one({"_id": ObjectId(notif_id_str)}, {"$set": {"is_read": True}})
+        shares_col.update_one({"_id": share["_id"]}, {"$set": {"is_seen": True}})
+        
+        st.success("Saved to your personal album!")
+        time.sleep(1)
+        del st.query_params["preview_notif"]
+        st.rerun()
+        
+    if c2.button("Mark Read & Close", use_container_width=True):
+        notifications_col.update_one({"_id": ObjectId(notif_id_str)}, {"$set": {"is_read": True}})
+        del st.query_params["preview_notif"]
+        st.rerun()
+
 @st.dialog("✨ Memory Highlight")
 def render_story_dialog(group_idx, idx):
     groups = st.session_state.get("story_groups", [])
-    
     if not groups or group_idx >= len(groups) or idx >= len(groups[group_idx]["items"]):
         if "story_group" in st.query_params: del st.query_params["story_group"]
         if "story_idx" in st.query_params: del st.query_params["story_idx"]
@@ -155,19 +276,12 @@ def render_story_dialog(group_idx, idx):
     st.markdown("""
     <style>
     div[data-testid="stDialog"] > div {
-        background: rgba(40, 40, 40, 0.4) !important;
-        backdrop-filter: blur(25px) !important;
-        -webkit-backdrop-filter: blur(25px) !important;
-        border: 1px solid rgba(255, 255, 255, 0.2) !important;
-        border-radius: 24px !important;
-        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
-        padding: 10px 20px 20px 20px !important;
-        max-width: 500px !important; 
-        margin: auto;
+        background: rgba(40, 40, 40, 0.4) !important; backdrop-filter: blur(25px) !important; -webkit-backdrop-filter: blur(25px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important; border-radius: 24px !important; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
+        padding: 10px 20px 20px 20px !important; max-width: 500px !important; margin: auto;
     }
     div[data-testid="stModal"] > div { background-color: rgba(0, 0, 0, 0.7) !important; }
     button[aria-label="Close"] { display: none !important; } 
-    
     .story-progress-bar { width: 100%; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; margin-bottom: 15px; overflow: hidden; }
     .story-progress-fill { height: 100%; background: #ffffff; width: 0%; animation: progress-fill 15s linear forwards; box-shadow: 0 0 10px rgba(255,255,255,0.8);}
     @keyframes progress-fill { to { width: 100%; } }
@@ -186,21 +300,11 @@ def render_story_dialog(group_idx, idx):
     next_group_idx = group_idx + 1
     session_token = html.escape(st.query_params.get('session', ''))
     
-    if next_idx < len(current_group["items"]):
-        next_search = f"?page=app&tab=drive&folder=root&story_group={group_idx}&story_idx={next_idx}&session={session_token}"
-    elif next_group_idx < len(groups):
-        next_search = f"?page=app&tab=drive&folder=root&story_group={next_group_idx}&story_idx=0&session={session_token}"
-    else:
-        next_search = f"?page=app&tab=drive&folder=root&session={session_token}"
+    if next_idx < len(current_group["items"]): next_search = f"?page=app&tab=drive&folder=root&story_group={group_idx}&story_idx={next_idx}&session={session_token}"
+    elif next_group_idx < len(groups): next_search = f"?page=app&tab=drive&folder=root&story_group={next_group_idx}&story_idx=0&session={session_token}"
+    else: next_search = f"?page=app&tab=drive&folder=root&session={session_token}"
         
-    components.html(f"""
-    <script>
-        if (window.top.storyTimeout) {{ clearTimeout(window.top.storyTimeout); }}
-        window.top.storyTimeout = setTimeout(function() {{
-            window.top.location.search = "{next_search}";
-        }}, 15000);
-    </script>
-    """, height=0)
+    components.html(f'<script>if (window.top.storyTimeout) {{ clearTimeout(window.top.storyTimeout); }} window.top.storyTimeout = setTimeout(function() {{ window.top.location.search = "{next_search}"; }}, 15000);</script>', height=0)
 
 
 # ================= NATIVE GESTURE ROUTING SYSTEM =================
@@ -248,7 +352,6 @@ if st.session_state.logged_in:
     if all_user_media:
         now = datetime.datetime.now(datetime.timezone.utc)
         recent, favorites, throwback = [], [], []
-        
         for f in all_user_media:
             upload_date = f["_id"].generation_time
             age_days = (now - upload_date).days
@@ -259,11 +362,9 @@ if st.session_state.logged_in:
         if recent:
             recent.sort(key=lambda x: x["_id"].generation_time, reverse=True)
             story_groups.append({"label": "Recent Highlights", "items": recent[:6]})
-            
         if throwback:
             random.shuffle(throwback)
             story_groups.append({"label": "Memory Lane", "items": throwback[:6]})
-            
         if favorites:
             random.shuffle(favorites)
             story_groups.append({"label": "Favorites ⭐", "items": favorites[:6]})
@@ -281,50 +382,29 @@ def inject_global_css():
     css = """
     <style>
     :root {
-        --bg-app: #f2f2f7;           
-        --bg-card: #ffffff;          
-        --bg-sidebar: #f2f2f7;       
-        --bg-input: #ffffff;
-        --text-primary: #000000;     
-        --text-secondary: #8e8e93;   
-        --border: #d1d1d6;
-        --accent: #007aff;           
-        --btn-hover: #e5e5ea;
+        --bg-app: #f2f2f7; --bg-card: #ffffff; --bg-sidebar: #f2f2f7; --bg-input: #ffffff;
+        --text-primary: #000000; --text-secondary: #8e8e93; --border: #d1d1d6; --accent: #007aff; --btn-hover: #e5e5ea;
     }
     @media (prefers-color-scheme: dark) {
         :root {
-            --bg-app: #000000;           
-            --bg-card: #1c1c1e;          
-            --bg-sidebar: #000000;       
-            --bg-input: #1c1c1e;         
-            --text-primary: #ffffff;     
-            --text-secondary: #8e8e93;   
-            --border: #38383a;           
-            --accent: #0a84ff;           
-            --btn-hover: #2c2c2e;
+            --bg-app: #000000; --bg-card: #1c1c1e; --bg-sidebar: #000000; --bg-input: #1c1c1e;
+            --text-primary: #ffffff; --text-secondary: #8e8e93; --border: #38383a; --accent: #0a84ff; --btn-hover: #2c2c2e;
         }
     }
-
     .stApp { background-color: var(--bg-app) !important; color: var(--text-primary) !important; }
     p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
-    
-    #MainMenu { visibility: hidden; }
-    .stDeployButton { display: none !important; }
+    #MainMenu { visibility: hidden; } .stDeployButton { display: none !important; }
     header[data-testid="stHeader"] { background-color: transparent !important; }
-    
     .title-text { color: var(--text-primary) !important; font-weight: 800; font-size: 32px; text-align: center; margin-bottom: 5px; }
     .sub-text { color: var(--text-secondary) !important; font-size: 15px; text-align: center; margin-bottom: 30px; }
     .brand-logo { font-size: 24px; font-weight: 800; color: var(--accent) !important; letter-spacing: 0.5px; text-decoration: none; }
     .muted-text { color: var(--text-secondary) !important; }
 
     .auth-container, .content-card {
-        max-width: 480px !important; width: 90% !important; 
-        background-color: var(--bg-card) !important;
-        padding: 50px 40px !important; border-radius: 20px !important;
-        border: 1px solid var(--border) !important; margin: 8vh auto !important; 
+        max-width: 480px !important; width: 90% !important; background-color: var(--bg-card) !important;
+        padding: 50px 40px !important; border-radius: 20px !important; border: 1px solid var(--border) !important; margin: 8vh auto !important; 
     }
     .content-card { max-width: 800px !important; }
-
     .stTextInput div[data-baseweb="input"], .stDateInput div[data-baseweb="input"], .stTextArea div[data-baseweb="textarea"] {
         background-color: var(--bg-input) !important; border: 1.5px solid var(--border) !important; border-radius: 12px !important; 
     }
@@ -333,32 +413,28 @@ def inject_global_css():
     }
     ::placeholder { color: var(--text-secondary) !important; opacity: 1 !important; font-weight: 400 !important; }
     .stTextInput div[data-baseweb="input"]:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.2) !important; }
-
     .stButton > button[kind="primary"] { 
         background-color: var(--accent) !important; color: #ffffff !important; border: none !important; border-radius: 12px !important; 
         padding: 14px 24px !important; font-weight: 600 !important; width: 100% !important; margin-top: 10px !important; 
     }
-    .native-link { color: var(--accent) !important; text-decoration: none; font-weight: 600; }
-    .native-link:hover { text-decoration: underline; }
+    .native-link { color: var(--accent) !important; text-decoration: none; font-weight: 600; } .native-link:hover { text-decoration: underline; }
     
-    .sidebar-link {
-        display: flex; align-items: center; gap: 10px; background: transparent; color: var(--text-primary) !important;
-        text-decoration: none; font-weight: 500; font-size: 15px;
-        border-radius: 8px; padding: 10px 14px; margin-bottom: 4px; transition: background 0.2s;
-    }
-    .sidebar-link:hover { background: var(--btn-hover); text-decoration: none;}
-
-    .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; }
+    /* FIX: Bring Custom Nav above invisible Streamlit Header */
+    .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 999999; }
     .nav-links { display: flex; gap: 20px; align-items: center; }
     .nav-links a { color: var(--text-primary) !important; text-decoration: none; font-weight: 500; font-size: 15px; }
     .nav-links a:hover { color: var(--accent) !important; }
 
-    /* DASHBOARD */
+    .sidebar-link {
+        display: flex; align-items: center; gap: 10px; background: transparent; color: var(--text-primary) !important;
+        text-decoration: none; font-weight: 500; font-size: 15px; border-radius: 8px; padding: 10px 14px; margin-bottom: 4px; transition: background 0.2s;
+    }
+    .sidebar-link:hover { background: var(--btn-hover); text-decoration: none;}
+
     [data-testid="stSidebar"] { background-color: var(--bg-sidebar) !important; border-right: 1px solid var(--border) !important; padding-top: 1rem; }
     .dashboard-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;}
     .dashboard-title { font-size: 32px; font-weight: 800; color: var(--text-primary); }
     
-    /* Dynamic Story Section */
     .story-wrapper { display: flex; overflow-x: auto; gap: 15px; padding: 10px 0 20px 0; margin-bottom: 10px; }
     .story-wrapper::-webkit-scrollbar { display: none; }
     .story-link { text-decoration: none; display: inline-block; }
@@ -370,43 +446,40 @@ def inject_global_css():
     .story-label { font-size: 12px; font-weight: 600; color: var(--text-primary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80px;}
 
     .album-link { text-decoration: none; display: block; }
-    
-    /* MEDIA GRID & NATIVE OVERLAYS */
     .media-container-wrapper { position: relative; margin-bottom: 15px; cursor: pointer; }
     .media-container-wrapper:hover .square-media { transform: scale(1.02); }
-    
     .square-media {
         width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s;
-        border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-        background: var(--bg-card); border: 1px solid var(--border);
+        border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: var(--bg-card); border: 1px solid var(--border);
     }
     .square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; }
     
     [data-testid="column"] { position: relative; }
-    [data-testid="column"] [data-testid="stPopover"] {
+    .media-container-wrapper [data-testid="stPopover"] {
         position: absolute !important; top: 8px !important; right: 8px !important; z-index: 10 !important;
     }
-    [data-testid="column"] [data-testid="stPopover"] > button {
+    .media-container-wrapper [data-testid="stPopover"] > button {
         background-color: rgba(0, 0, 0, 0.6) !important; color: white !important;
-        border: none !important; border-radius: 50% !important;
-        width: 32px !important; height: 32px !important;
+        border: none !important; border-radius: 50% !important; width: 32px !important; height: 32px !important;
         display: flex; align-items: center; justify-content: center; line-height: 0 !important;
         padding: 0 !important; font-size: 18px !important; box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
     }
-    [data-testid="column"] [data-testid="stPopover"] > button:hover { background-color: rgba(0, 0, 0, 0.9) !important; transform: scale(1.05); }
+    .media-container-wrapper [data-testid="stPopover"] > button:hover { background-color: rgba(0, 0, 0, 0.9) !important; transform: scale(1.05); }
     
     [data-testid="stFileUploader"] > div { background-color: var(--bg-card) !important; border: 1px dashed var(--border) !important; border-radius: 16px !important; padding: 20px !important; }
-    
     .profile-header-widget { display: flex; align-items: center; gap: 12px; background: var(--bg-card); padding: 6px 16px 6px 6px; border-radius: 50px; border: 1px solid var(--border); box-shadow: 0 2px 10px rgba(0,0,0,0.05); transition: transform 0.2s; cursor: pointer; color: var(--text-primary) !important;}
     .profile-header-widget:hover { transform: scale(1.02); }
     .profile-header-widget img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
     .profile-header-widget span { font-weight: 600; font-size: 14px;}
-
     .custom-footer { margin-top: 50px; padding: 20px; text-align: center; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; }
 
+    /* FIX: Mobile Responsiveness */
     @media (max-width: 768px) {
         .auth-container, .content-card { border: none !important; border-radius: 0 !important; padding: 30px 20px !important; margin: 0 !important; width: 100% !important; max-width: 100% !important;}
-        .top-nav { padding: 15px 20px; }
+        .top-nav { padding: 15px 10px; flex-direction: column; gap: 10px; justify-content: center; text-align: center;}
+        .nav-links { gap: 15px; }
+        .nav-links a { font-size: 14px; }
+        .brand-logo { font-size: 22px; }
         .block-container { padding-top: 3rem !important; } 
     }
     </style>
@@ -414,16 +487,22 @@ def inject_global_css():
     st.markdown(css, unsafe_allow_html=True)
 
 
-# ================= CATCH POPUPS & TRUE FULL-SCREEN LIGHTBOX =================
+# ================= CATCH POPUPS, DIALOGS, & TRUE FULL-SCREEN LIGHTBOX =================
+if "share_media" in st.query_params and st.session_state.logged_in:
+    inject_global_css()
+    share_media_dialog(st.query_params["share_media"])
+
+if "preview_notif" in st.query_params and st.session_state.logged_in:
+    inject_global_css()
+    preview_shared_dialog(st.query_params["preview_notif"])
+
 if "lightbox_idx" in st.query_params and st.session_state.logged_in:
     inject_global_css()
     
     folder_id_str = st.query_params.get("folder", "root")
     idx = int(st.query_params["lightbox_idx"])
-    
     f_id = None if folder_id_str == "root" else ObjectId(folder_id_str)
     
-    # Fetch all files and perform the new PIN-SORTING logic exactly like the grid
     files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": f_id}))
     pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0))
     unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
@@ -444,7 +523,7 @@ if "lightbox_idx" in st.query_params and st.session_state.logged_in:
     close_search = f"?page=app&tab=drive&folder={safe_folder_id}&session={session_token}"
     safe_url = html.escape(file['url'])
 
-    media_element = f"<img src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
+    media_element = f"<img src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     prev_button = f"<a href='{prev_search}' target='_parent' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_parent' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
@@ -452,8 +531,7 @@ if "lightbox_idx" in st.query_params and st.session_state.logged_in:
 <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); z-index: 9999999; display: flex; align-items: center; justify-content: center;">
 <style>
 .liquid-btn {{
-    position: absolute; display: flex; align-items: center; justify-content: center;
-    width: 60px; height: 60px; border-radius: 50%;
+    position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%;
     background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
     border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); transition: all 0.3s ease; cursor: pointer; z-index: 10000000;
@@ -473,48 +551,27 @@ if "lightbox_idx" in st.query_params and st.session_state.logged_in:
 
     components.html(f"""
     <script>
-        window.parent.fullscreenSwipeNext = "{next_search}";
-        window.parent.fullscreenSwipePrev = "{prev_search}";
-        window.parent.hasFullscreenNext = {has_next};
-        window.parent.hasFullscreenPrev = {has_prev};
-
+        window.parent.fullscreenSwipeNext = "{next_search}"; window.parent.fullscreenSwipePrev = "{prev_search}";
+        window.parent.hasFullscreenNext = {has_next}; window.parent.hasFullscreenPrev = {has_prev};
         if (!window.parent.fullscreenSwipeListenerAdded) {{
             let touchstartX = 0; let touchendX = 0;
-
-            window.parent.document.addEventListener('touchstart', e => {{
-                touchstartX = e.changedTouches[0].screenX;
-            }}, {{passive: true}});
-
+            window.parent.document.addEventListener('touchstart', e => {{ touchstartX = e.changedTouches[0].screenX; }}, {{passive: true}});
             window.parent.document.addEventListener('touchend', e => {{
                 touchendX = e.changedTouches[0].screenX;
-                
-                if (touchendX < touchstartX - 60 && window.parent.hasFullscreenNext) {{
-                    window.parent.location.search = window.parent.fullscreenSwipeNext;
-                }}
-                if (touchendX > touchstartX + 60 && window.parent.hasFullscreenPrev) {{
-                    window.parent.location.search = window.parent.fullscreenSwipePrev;
-                }}
+                if (touchendX < touchstartX - 60 && window.parent.hasFullscreenNext) window.parent.location.search = window.parent.fullscreenSwipeNext;
+                if (touchendX > touchstartX + 60 && window.parent.hasFullscreenPrev) window.parent.location.search = window.parent.fullscreenSwipePrev;
             }}, {{passive: true}});
-            
             window.parent.fullscreenSwipeListenerAdded = true;
         }}
     </script>
     """, height=0)
-    
     st.stop()
     
 elif "story_group" in st.query_params and "story_idx" in st.query_params and st.session_state.logged_in:
     inject_global_css()
     render_story_dialog(int(st.query_params["story_group"]), int(st.query_params["story_idx"]))
 else:
-    components.html("""
-    <script>
-        if (window.top.storyTimeout) {
-            clearTimeout(window.top.storyTimeout);
-            window.top.storyTimeout = null;
-        }
-    </script>
-    """, height=0)
+    components.html('<script>if (window.top.storyTimeout) { clearTimeout(window.top.storyTimeout); window.top.storyTimeout = null; }</script>', height=0)
 
 
 # ================= PUBLIC ROUTING (LOGGED OUT) =================
@@ -541,19 +598,13 @@ if not st.session_state.logged_in:
         if app_page == "landing":
             st.markdown('<div class="title-text" style="font-size: 3.5rem; margin-top: 4rem;">Secure Your Memories</div>', unsafe_allow_html=True)
             st.markdown('<div class="sub-text" style="font-size: 1.25rem; max-width: 600px; margin: 0 auto 3rem auto;">Your personal digital bibliotheca. Access, organize, and protect your media with absolute privacy.</div>', unsafe_allow_html=True)
-            st.markdown(f'<div style="text-align: center;"><a href="{get_nav_link("auth", "signup")}" target="_parent" style="background: var(--accent); color: #ffffff; padding: 14px 30px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 16px;">Create Free Vault</a></div>', unsafe_allow_html=True)
+            # FIX: Z-index for main button to stay clickable above any stray overlays
+            st.markdown(f'<div style="text-align: center; position: relative; z-index: 50;"><a href="{get_nav_link("auth", "signup")}" target="_parent" style="background: var(--accent); color: #ffffff; padding: 14px 30px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 16px;">Create Free Vault</a></div>', unsafe_allow_html=True)
             st.write("<br><br><br><h3 style='text-align: center; margin-bottom: 30px;'>Community Vault Gallery</h3>", unsafe_allow_html=True)
             
             pipeline = [
                 {"$match": {"resource_type": "image"}},
-                {
-                    "$lookup": {
-                        "from": "folders",
-                        "localField": "folder_id",
-                        "foreignField": "_id",
-                        "as": "folder_info"
-                    }
-                },
+                {"$lookup": {"from": "folders", "localField": "folder_id", "foreignField": "_id", "as": "folder_info"}},
                 {"$unwind": {"path": "$folder_info", "preserveNullAndEmptyArrays": True}},
                 {"$match": {"folder_info.is_locked": {"$ne": True}}},
                 {"$sample": {"size": 20}}
@@ -653,13 +704,14 @@ if not st.session_state.logged_in:
             fname = st.text_input("First Name", placeholder="First Name", label_visibility="collapsed", key="s_fname")
             lname = st.text_input("Last Name", placeholder="Last Name", label_visibility="collapsed", key="s_lname")
             bday = st.date_input("Birthday", value=datetime.date(2000, 1, 1), min_value=datetime.date(1900, 1, 1), label_visibility="collapsed")
+            pin_code = st.text_input("PIN / Zip Code", placeholder="Location PIN", label_visibility="collapsed", key="s_pin")
             s_email = st.text_input("Email", placeholder="you@example.com", label_visibility="collapsed", key="s_email")
             s_pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="s_pwd")
             
             if st.button("Sign Up", type="primary", use_container_width=True):
-                if not s_email or not s_pwd or not fname: st.error("Please fill all required fields.")
+                if not s_email or not s_pwd or not fname or not pin_code: st.error("Please fill all required fields.")
                 else:
-                    result = register(s_email, s_pwd, fname, lname, bday)
+                    result = register(s_email, s_pwd, fname, lname, bday, pin_code)
                     if result:
                         token = str(uuid.uuid4())
                         users_col.update_one({"username": result}, {"$set": {"session_token": token}})
@@ -682,7 +734,7 @@ if not st.session_state.logged_in:
                         if user:
                             with st.spinner("Sending OTP..."):
                                 otp = str(secrets.randbelow(900000) + 100000)
-                                exp_time = time.time() + 600 # 10 minute expiration
+                                exp_time = time.time() + 600 
                                 users_col.update_one({"email": clean_email}, {"$set": {"reset_otp": otp, "reset_otp_exp": exp_time}})
                                 if send_otp_email(clean_email, otp):
                                     st.session_state.reset_step = 1; st.session_state.reset_email = clean_email; st.rerun()
@@ -713,7 +765,7 @@ elif active_tab in ["drive", "profile"]:
 
     user_data = users_col.find_one({"username": st.session_state.username})
     
-    # ---------------- ROOT RESOLUTION (FIXED OBJECTID PARSING) ----------------
+    # ---------------- ROOT RESOLUTION ----------------
     root_folder = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
     if active_folder == "root" and root_folder: actual_folder_id = root_folder["_id"]
     else:
@@ -759,19 +811,35 @@ elif active_tab in ["drive", "profile"]:
         current = folders_col.find_one({"_id": actual_folder_id})
         is_root = current is None or current.get("parent_id") is None
 
-        # --- HEADER ---
+        # --- HEADER & NOTIFICATION HUB ---
         prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
         display_name = html.escape(user_data.get("first_name", st.session_state.username))
         prof_url = get_nav_link("app", tab="profile")
         
-        c_title, c_prof = st.columns([4, 1])
+        c_title, c_notif, c_prof = st.columns([5, 1, 2])
         title_text = "Albums" if is_root else html.escape(current["folder_name"])
         if not is_root and current.get("is_locked"): title_text += " 🔒"
         
         with c_title: st.markdown(f'<div class="dashboard-title">{title_text}</div>', unsafe_allow_html=True)
+        
+        with c_notif:
+            unread_notifs = list(notifications_col.find({"username": st.session_state.username, "is_read": False}).sort("created_at", -1))
+            bell_label = f"🔔 ({len(unread_notifs)})" if unread_notifs else "🔔"
+            
+            with st.popover(bell_label, use_container_width=True):
+                st.markdown("**Notifications**")
+                if not unread_notifs:
+                    st.write("No new notifications.")
+                else:
+                    for n in unread_notifs:
+                        safe_sender = html.escape(n["sender"])
+                        if st.button(f"📩 {safe_sender} {n['message']}", key=f"nbtn_{n['_id']}", use_container_width=True):
+                            st.query_params["preview_notif"] = str(n['_id'])
+                            st.rerun()
+                            
         with c_prof: st.markdown(f'<div style="display: flex; justify-content: flex-end;"><a href="{prof_url}" target="_parent" style="text-decoration: none;"><div class="profile-header-widget"><img src="{html.escape(prof_pic)}"><span>{display_name}</span></div></a></div>', unsafe_allow_html=True)
 
-        # --- DYNAMIC STORIES (COLLECTIONS RENDERER) ---
+        # --- DYNAMIC STORIES ---
         if is_root and st.session_state.story_groups:
             story_html = '<div class="story-wrapper">'
             colors = ["linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%)", "var(--border)", "var(--accent)", "#34d399"]
@@ -808,8 +876,6 @@ elif active_tab in ["drive", "profile"]:
                     if st.button("🗑 Delete Album", key=f"del_fold_{current['_id']}", use_container_width=True): delete_folder_dialog(current["_id"], current["folder_name"])
                     
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-                    
-                    # --- PRIVACY SETTING ---
                     st.markdown("**Privacy Settings**")
                     is_locked = current.get("is_locked", False)
                     lock_btn_txt = "🔓 Make Public (Community)" if is_locked else "🔒 Lock Album (Private)"
@@ -850,7 +916,6 @@ elif active_tab in ["drive", "profile"]:
         # --- CONTENT GRID (ALBUMS & MEDIA) ---
         folders = list(folders_col.find({"username": st.session_state.username, "parent_id": actual_folder_id}))
         
-        # PIN-SORTING LOGIC FOR FOLDER VIEW
         files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
         pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0))
         unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
@@ -906,7 +971,6 @@ elif active_tab in ["drive", "profile"]:
                     
                     safe_tag = html.escape(file.get("tag", ""))
                     emoji_badge = f'<div style="position:absolute; top:8px; left:8px; font-size:20px; z-index:10; background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(5px); padding: 4px 8px; border-radius: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: none;">{safe_tag}</div>' if safe_tag else ""
-                    
                     pin_badge = '<div style="position:absolute; top:8px; right:45px; font-size:18px; z-index:10; text-shadow: 0 2px 4px rgba(0,0,0,0.5); pointer-events: none;">📌</div>' if file.get("pin_order", 0) > 0 else ""
                     
                     session_token = html.escape(st.query_params.get('session', ''))
@@ -917,7 +981,6 @@ elif active_tab in ["drive", "profile"]:
                     if file["resource_type"] == "image":
                         media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
                     else:
-                        # NEW: Autoplay loop cinematic videos on folder view
                         media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;"></video></div>'
                     media_html += '</a>'
                     st.markdown(media_html.strip(), unsafe_allow_html=True)
@@ -925,12 +988,15 @@ elif active_tab in ["drive", "profile"]:
                     with st.popover("⋮"):
                         st.markdown("**Actions**")
                         
-                        # --- PIN PHOTO ENGINE ---
+                        if st.button("🔗 Share Media", key=f"share_{file['_id']}", use_container_width=True):
+                            st.query_params["share_media"] = str(file['_id'])
+                            st.rerun()
+                            
+                        st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+                        
                         if file.get("pin_order", 0) > 0:
-                            # Instant Rerun triggers automatic menu closure
                             if st.button("📌 Unpin Photo", key=f"unpin_{file['_id']}", use_container_width=True):
                                 files_col.update_one({"_id": file["_id"]}, {"$unset": {"pin_order": ""}})
-                                # Re-balance the serial sequence for remaining pinned photos
                                 remaining_pins = list(files_col.find({"folder_id": actual_folder_id, "pin_order": {"$exists": True}}).sort("pin_order", 1))
                                 for r_idx, r_file in enumerate(remaining_pins):
                                     files_col.update_one({"_id": r_file["_id"]}, {"$set": {"pin_order": r_idx + 1}})
@@ -960,7 +1026,6 @@ elif active_tab in ["drive", "profile"]:
                         
                         time_elapsed = time.time() - file.get("tag_time", 0)
                         is_locked = bool(file.get("tag")) and (time_elapsed < 86400) 
-                        
                         if is_locked:
                             if st.button(f"🔒 Locked ({safe_tag})", key=f"lock_{file['_id']}", use_container_width=True):
                                 locked_reaction_dialog(86400 - time_elapsed)
@@ -984,14 +1049,16 @@ elif active_tab in ["drive", "profile"]:
             st.markdown("<div class='content-card' style='margin: 0; max-width: 100% !important;'>", unsafe_allow_html=True)
             st.markdown("### Profile Settings")
             new_username = st.text_input("Username", value=user_data.get("username", ""))
+            new_pin = st.text_input("PIN / Zip Code", value=user_data.get("pin_code", ""))
             new_email = st.text_input("Email", value=user_data.get("email", ""))
             bio = st.text_area("Bio", value=user_data.get("bio", ""))
             pic = st.file_uploader("Profile Photo", key="profile_pic_upload")
             
             if st.button("Save Changes", type="primary"):
                 safe_bio = html.escape(str(bio).strip())
+                safe_pin = html.escape(str(new_pin).strip())
                 clean_email = str(new_email).strip().lower()
-                updates = {"bio": safe_bio, "email": clean_email}
+                updates = {"bio": safe_bio, "email": clean_email, "pin_code": safe_pin}
                 if pic:
                     res = cloudinary.uploader.upload(pic)
                     updates["profile_photo"] = res["secure_url"]
@@ -1006,7 +1073,7 @@ elif active_tab in ["drive", "profile"]:
                         folders_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
                         files_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
                         st.session_state.username = clean_username
-                        st.success("Profile and Username Updated!"); time.sleep(1); st.rerun()
+                        st.success("Profile Updated!"); time.sleep(1); st.rerun()
                 else:
                     users_col.update_one({"username": st.session_state.username}, {"$set": updates})
                     st.success("Profile Updated!"); time.sleep(1); st.rerun()
