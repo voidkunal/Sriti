@@ -135,7 +135,7 @@ active_folder = st.query_params.get("folder", "root")
 defaults = {
     "logged_in": False, "username": "", "reset_step": 0, "reset_email": "",
     "uploader_key": 0, "folder_key": 0, "story_groups": [], "pending_share": None,
-    "pending_delete": None, "pending_locked_react": None
+    "pending_delete": None, "pending_locked_react": None, "pending_move": None
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -148,7 +148,6 @@ if not st.session_state.logged_in and "session" in st.query_params:
         st.session_state.logged_in = True
         st.session_state.username = user["username"]
 
-
 # --- HANDLE LIGHTBOX ACTIONS & STORY REACTIONS ---
 if st.session_state.logged_in:
     if "action" in st.query_params and "file_id" in st.query_params:
@@ -160,6 +159,8 @@ if st.session_state.logged_in:
             if file:
                 if action == "confirm_delete":
                     st.session_state.pending_delete = str(fid)
+                elif action == "move":
+                    st.session_state.pending_move = str(fid)
                 elif action == "locked_react":
                     time_elapsed = time.time() - file.get("tag_time", 0)
                     st.session_state.pending_locked_react = 86400 - time_elapsed
@@ -180,8 +181,6 @@ if st.session_state.logged_in:
         
         del st.query_params["action"]
         del st.query_params["file_id"]
-        # Keep lightbox index so returning from dialog keeps user in full screen if desired, 
-        # or clear it so they see dialog over grid. Clearing is safer for dialogs.
         if "lightbox_idx" in st.query_params: del st.query_params["lightbox_idx"]
         st.rerun()
 
@@ -191,6 +190,7 @@ if st.session_state.logged_in:
                 fid = ObjectId(st.query_params["file_id"])
                 files_col.update_one({"_id": fid}, {"$set": {"tag": st.query_params["react"], "tag_time": time.time()}})
             elif "story_group" in st.query_params and "story_idx" in st.query_params:
+                # Direct story reaction catch
                 s_grp = int(st.query_params["story_group"])
                 s_idx = int(st.query_params["story_idx"])
                 if s_grp < len(st.session_state.story_groups):
@@ -198,6 +198,10 @@ if st.session_state.logged_in:
                     if s_idx < len(items):
                         file_id = items[s_idx]["_id"]
                         files_col.update_one({"_id": file_id}, {"$set": {"tag": st.query_params["react"], "tag_time": time.time()}})
+            else:
+                favorites = list(files_col.find({"username": st.session_state.username, "tag": {"$ne": ""}}).sort("_id", -1).limit(1))
+                if favorites:
+                    files_col.update_one({"_id": favorites[0]["_id"]}, {"$set": {"tag": st.query_params["react"], "tag_time": time.time()}})
         except Exception: pass
         del st.query_params["react"]
         if "file_id" in st.query_params: del st.query_params["file_id"]
@@ -229,7 +233,7 @@ if st.session_state.logged_in:
             story_groups.append({"label": "Memory Lane", "items": throwback[:6]})
         if favorites:
             random.shuffle(favorites)
-            story_groups.append({"label": "This week your fav ⭐", "items": favorites[:6]})
+            story_groups.append({"label": "⭐", "items": favorites[:6]})
             
         random_media = all_user_media[:]
         random.shuffle(random_media)
@@ -262,8 +266,8 @@ def inject_global_css():
     [data-testid="stSidebar"] { display: none !important; }
     [data-testid="collapsedControl"] { display: none !important; }
     
-    div[data-testid="stAppViewBlockContainer"] { z-index: 10; padding-top: 1rem !important; }
-    div[data-testid="stMarkdownContainer"] { position: relative; z-index: 50; }
+    div[data-testid="stAppViewBlockContainer"] { z-index: 10 !important; padding-top: 1rem !important; }
+    div[data-testid="stMarkdownContainer"] { position: relative; z-index: 50; pointer-events: auto !important; }
 
     .title-text { color: var(--text-primary) !important; font-weight: 800; font-size: 32px; text-align: center; margin-bottom: 5px; }
     .sub-text { color: var(--text-secondary) !important; font-size: 15px; text-align: center; margin-bottom: 30px; }
@@ -342,8 +346,6 @@ def inject_global_css():
     @media (max-width: 768px) {
         .auth-container, .content-card { border: none !important; border-radius: 0 !important; padding: 30px 20px !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; pointer-events: auto !important;}
         .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; z-index: 9999999 !important; pointer-events: auto !important;}
-        .nav-links { gap: 15px; flex-wrap: wrap; justify-content: center; width: 100%; z-index: 9999999 !important; pointer-events: auto !important;}
-        .nav-links a { font-size: 16px; padding: 8px 12px; flex: 1; min-width: 80px; font-weight: 600; text-align: center;}
         .brand-logo { font-size: 28px; margin-bottom: 10px;}
         .masonry-gallery { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 5px; }
         .block-container { padding-top: 1rem !important; } 
@@ -386,6 +388,36 @@ def rename_folder_dialog(folder_id, current_name):
         st.rerun()
     if c2.button("Cancel", use_container_width=True): st.rerun()
 
+@st.dialog("📂 Move Media")
+def move_media_dialog(file_id_str):
+    try:
+        fid = ObjectId(file_id_str)
+        file = files_col.find_one({"_id": fid})
+        if not file:
+            st.error("File not found")
+            if st.button("Close"): st.rerun()
+            return
+    except Exception:
+        st.rerun()
+
+    folders = list(folders_col.find({"username": st.session_state.username}))
+    folder_options = {f["folder_name"] + (" (Home)" if f["folder_name"]=="root" else "") : f["_id"] for f in folders}
+
+    st.write(f"Moving: **{html.escape(file.get('filename', 'Media Item'))}**")
+    selected_folder_name = st.selectbox("Select destination album:", list(folder_options.keys()))
+
+    c1, c2 = st.columns(2)
+    if c1.button("Move File", type="primary", use_container_width=True):
+        new_folder_id = folder_options[selected_folder_name]
+        files_col.update_one({"_id": fid}, {"$set": {"folder_id": new_folder_id}})
+        st.success("File moved successfully!")
+        time.sleep(1)
+        st.session_state.pending_move = None
+        st.rerun()
+    if c2.button("Cancel", use_container_width=True):
+        st.session_state.pending_move = None
+        st.rerun()
+
 @st.dialog("⏳ Reaction Locked")
 def locked_reaction_dialog(remaining_seconds):
     hours, remainder = divmod(int(remaining_seconds), 3600)
@@ -394,16 +426,13 @@ def locked_reaction_dialog(remaining_seconds):
     st.info(f"Time remaining: **{hours} hours and {minutes} minutes**")
     if st.button("Got it", use_container_width=True): st.rerun()
 
-@st.dialog("🔗 Share Media", width="large")
+@st.dialog("🔗 Share Media Batch", width="large")
 def share_media_dialog(target_data, mode):
     curr_user = users_col.find_one({"username": st.session_state.username})
     user_pin = curr_user.get("pin_code", "")
     
     try:
-        if mode == "batch":
-            selected_media_ids = [ObjectId(tid) for tid in target_data] if isinstance(target_data, list) else [ObjectId(target_data)]
-            st.markdown(f"### 1. Share Batch ({len(selected_media_ids)} items)")
-        elif mode == "folder":
+        if mode == "folder":
             cf_id = None if target_data == "root" else ObjectId(target_data)
             folder_files = list(files_col.find({"username": st.session_state.username, "folder_id": cf_id}))
             if not folder_files:
@@ -479,15 +508,33 @@ def preview_shared_dialog(notif_id_str):
     if not notif:
         if st.button("Close"): del st.query_params["preview_notif"]; st.rerun()
         return
-        
+
+    # Handle explicit share_reaction preview rendering
     if notif.get("type") == "share_reaction":
         st.info(f"**{html.escape(notif['sender'])}** {html.escape(notif['message'])}")
+        
+        # Display the media they reacted to
+        share = shares_col.find_one({"_id": notif.get("share_id")}) if notif.get("share_id") else None
+        if share and share.get("media_ids"):
+            files_to_preview = list(files_col.find({"_id": {"$in": share.get("media_ids")[:1]}})) # Show preview of first item
+            if files_to_preview:
+                p_file = files_to_preview[0]
+                safe_preview_url = html.escape(p_file["url"])
+                st.markdown('<div class="media-container-wrapper" style="width: 200px;">', unsafe_allow_html=True)
+                if p_file["resource_type"] == "image":
+                    st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
+                else:
+                    vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
+                    st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
         if st.button("Mark as Read & Close"):
             notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
             del st.query_params["preview_notif"]
             st.rerun()
         return
 
+    # Standard Share display
     share = shares_col.find_one({"_id": notif.get("share_id")})
     media_ids = share.get("media_ids", []) if share else []
     if not media_ids:
@@ -505,12 +552,10 @@ def preview_shared_dialog(notif_id_str):
         with preview_cols[p_idx % 4]:
             st.markdown('<div class="media-container-wrapper">', unsafe_allow_html=True)
             if p_file["resource_type"] == "image":
-                st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
             else:
                 vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>', unsafe_allow_html=True)
-            with st.popover("⋮"):
-                st.markdown(f'<a href="{safe_preview_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
+                st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
             
     st.markdown("<hr style='border-color: rgba(255,255,255,0.2); margin-top: 30px;'>", unsafe_allow_html=True)
@@ -519,7 +564,7 @@ def preview_shared_dialog(notif_id_str):
         e_cols = st.columns(4)
         for e_idx, em in enumerate(["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]):
             if e_cols[e_idx % 4].button(em, key=f"sreact_{em}", use_container_width=True):
-                notifications_col.insert_one({"username": notif['sender'], "sender": st.session_state.username, "type": "share_reaction", "message": f"reacted {em} to your shared memory.", "is_read": False, "created_at": time.time()})
+                notifications_col.insert_one({"username": notif['sender'], "sender": st.session_state.username, "type": "share_reaction", "share_id": notif.get("share_id"), "message": f"reacted {em} to your shared memory.", "is_read": False, "created_at": time.time()})
                 st.success(f"Sent {em} to {html.escape(notif['sender'])}!"); time.sleep(1); st.rerun()
 
     st.write("<br>", unsafe_allow_html=True)
@@ -549,6 +594,11 @@ def preview_shared_dialog(notif_id_str):
 
 @st.dialog("👤 Profile Hub", width="large")
 def render_profile_hub_fullscreen():
+    st.markdown("""<style>
+        div[data-testid="stDialog"] > div[role="dialog"] { width: 100vw !important; max-width: 100vw !important; height: 100vh !important; max-height: 100vh !important; margin: 0 !important; border-radius: 0 !important; background: var(--bg-app) !important; padding: 40px 5% !important; }
+        div[data-testid="stDialog"] button[aria-label="Close"] { top: 20px; right: 20px; transform: scale(1.5); }
+    </style>""", unsafe_allow_html=True)
+    
     user_data = users_col.find_one({"username": st.session_state.username})
     st.markdown('<div class="dashboard-title" style="margin-bottom: 20px;">Profile Hub</div>', unsafe_allow_html=True)
     p_tab1, p_tab2, p_tab3 = st.tabs(["⚙️ Settings", "🔔 Notifications", "👥 Switch Profiles"])
@@ -646,43 +696,49 @@ def render_profile_hub_fullscreen():
 
 @st.dialog("✨ Vault Assistant")
 def render_ai_chat_dialog():
-    st.markdown("<p class='muted-text'>Ask me directly about your storage, files, or account.</p>", unsafe_allow_html=True)
+    st.markdown("""<style>
+        div[data-testid="stDialog"] > div[role="dialog"] { width: 100vw !important; max-width: 100vw !important; height: 100vh !important; max-height: 100vh !important; margin: 0 !important; border-radius: 0 !important; background: var(--bg-app) !important; padding: 20px 0 !important; }
+        div[data-testid="stDialog"] button[aria-label="Close"] { top: 20px; right: 20px; transform: scale(1.5); }
+    </style>""", unsafe_allow_html=True)
     
-    if "ai_messages" not in st.session_state:
-        st.session_state.ai_messages = [{"role": "assistant", "content": "Hello! I can provide exact counts of your photos and albums, or factual information about your vault."}]
-    
-    chat_container = st.container(height=350)
-    with chat_container:
-        for msg in st.session_state.ai_messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-    
-    if prompt := st.chat_input("Ask a question about your vault..."):
-        st.session_state.ai_messages.append({"role": "user", "content": prompt})
+    _, center_col, _ = st.columns([1, 2.5, 1])
+    with center_col:
+        st.markdown('<div class="dashboard-title" style="margin-bottom: 5px;">Vault AI</div>', unsafe_allow_html=True)
+        st.markdown("<p class='muted-text'>Ask me directly about your storage, files, or account.</p>", unsafe_allow_html=True)
         
-        # Professional, concise data-parsing logic
-        total_files = files_col.count_documents({"username": st.session_state.username})
-        total_images = files_col.count_documents({"username": st.session_state.username, "resource_type": "image"})
-        total_videos = files_col.count_documents({"username": st.session_state.username, "resource_type": "video"})
-        total_folders = folders_col.count_documents({"username": st.session_state.username, "folder_name": {"$ne": "root"}})
-        user_doc = users_col.find_one({"username": st.session_state.username})
+        if "ai_messages" not in st.session_state:
+            st.session_state.ai_messages = [{"role": "assistant", "content": "Hello! I can provide exact counts of your photos and albums, or factual information about your vault."}]
         
-        lower_p = prompt.lower()
-        if any(w in lower_p for w in ["how many", "count", "number of", "total"]):
-            if any(w in lower_p for w in ["photo", "image", "pic"]): reply = f"You have {total_images} photos."
-            elif any(w in lower_p for w in ["video", "vid"]): reply = f"You have {total_videos} videos."
-            elif any(w in lower_p for w in ["folder", "album"]): reply = f"You have {total_folders} albums."
-            else: reply = f"You have {total_files} items in total."
-        elif "latest" in lower_p or "recent" in lower_p:
-             recent_file = files_col.find_one({"username": st.session_state.username}, sort=[("_id", -1)])
-             reply = f"Your most recent file was uploaded on {recent_file['_id'].generation_time.strftime('%b %d, %Y')}." if recent_file else "You haven't uploaded anything yet."
-        elif "pin" in lower_p or "location" in lower_p:
-            reply = f"Your vault PIN is {user_doc.get('pin_code')}."
-        else:
-            reply = f"I am your Vault AI. You can ask me factual questions like 'how many photos do I have?' or 'what is my PIN?'."
+        chat_container = st.container(height=500)
+        with chat_container:
+            for msg in st.session_state.ai_messages:
+                with st.chat_message(msg["role"]): st.markdown(msg["content"])
+        
+        if prompt := st.chat_input("Ask a question about your vault..."):
+            st.session_state.ai_messages.append({"role": "user", "content": prompt})
             
-        st.session_state.ai_messages.append({"role": "assistant", "content": reply})
-        st.rerun()
+            total_files = files_col.count_documents({"username": st.session_state.username})
+            total_images = files_col.count_documents({"username": st.session_state.username, "resource_type": "image"})
+            total_videos = files_col.count_documents({"username": st.session_state.username, "resource_type": "video"})
+            total_folders = folders_col.count_documents({"username": st.session_state.username, "folder_name": {"$ne": "root"}})
+            user_doc = users_col.find_one({"username": st.session_state.username})
+            
+            lower_p = prompt.lower()
+            if any(w in lower_p for w in ["how many", "count", "number of", "total"]):
+                if any(w in lower_p for w in ["photo", "image", "pic"]): reply = f"You have {total_images} photos."
+                elif any(w in lower_p for w in ["video", "vid"]): reply = f"You have {total_videos} videos."
+                elif any(w in lower_p for w in ["folder", "album"]): reply = f"You have {total_folders} albums."
+                else: reply = f"You have {total_files} items in total."
+            elif "latest" in lower_p or "recent" in lower_p:
+                 recent_file = files_col.find_one({"username": st.session_state.username}, sort=[("_id", -1)])
+                 reply = f"Your most recent file was uploaded on {recent_file['_id'].generation_time.strftime('%b %d, %Y')}." if recent_file else "You haven't uploaded anything yet."
+            elif "pin" in lower_p or "location" in lower_p:
+                reply = f"Your vault PIN is {user_doc.get('pin_code')}."
+            else:
+                reply = f"I am your Vault AI. You can ask me factual questions like 'how many photos do I have?' or 'what is my PIN?'."
+                
+            st.session_state.ai_messages.append({"role": "assistant", "content": reply})
+            st.rerun()
 
 # --- FULL-SCREEN LIGHTBOX & STORY RENDERERS ---
 def render_lightbox_fullscreen(idx, folder_id_str):
@@ -712,7 +768,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # Clean 3-Dot Hover Menu for Actions (Safely inside Fullscreen)
+    # Clean 3-Dot Menu 
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -720,13 +776,14 @@ def render_lightbox_fullscreen(idx, folder_id_str):
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="share", file_id=fid)}" target="_self">🔗 Share</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="pin", file_id=fid)}" target="_self">📌 Pin</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="cover", file_id=fid)}" target="_self">🖼️ Set Cover</a>
+            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="move", file_id=fid)}" target="_self">📂 Move</a>
             <a href="{safe_url}" target="_blank" download>⬇️ Download</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="confirm_delete", file_id=fid)}" target="_self" style="color: #ff3b30;">🗑️ Delete</a>
         </div>
     </div>
     '''
 
-    # Reaction Hover Menu with 24-hour lock enforcement
+    # Reaction Menu (Enforce 24h Lock)
     time_elapsed = time.time() - file.get("tag_time", 0)
     is_locked = bool(file.get("tag")) and (time_elapsed < 86400)
     
@@ -742,23 +799,36 @@ def render_lightbox_fullscreen(idx, folder_id_str):
         
     current_react = f"<div style='position:absolute; top:25px; left:25px; font-size: 32px; z-index:10000000;'>{html.escape(file.get('tag', ''))}</div>" if file.get("tag") else ""
 
-    lightbox_ui = f"""<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>{current_react}{action_html}{react_html}{prev_button}{next_button}{media_element}</div>"""
+    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>{current_react}{action_html}{react_html}{prev_button}{next_button}{media_element}</div>"""
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
 
+    # Safely attached swipe listener using parent document
     components.html(f"""
     <script>
         window.parent.fullscreenSwipeNext = "{next_search}"; window.parent.fullscreenSwipePrev = "{prev_search}";
         window.parent.hasFullscreenNext = {has_next}; window.parent.hasFullscreenPrev = {has_prev};
-        if (!window.parent.fullscreenSwipeListenerAdded) {{
-            let touchstartX = 0; let touchendX = 0;
-            window.parent.document.addEventListener('touchstart', e => {{ touchstartX = e.changedTouches[0].screenX; }}, {{passive: true}});
-            window.parent.document.addEventListener('touchend', e => {{
-                touchendX = e.changedTouches[0].screenX;
-                if (touchendX < touchstartX - 60 && window.parent.hasFullscreenNext) window.parent.location.search = window.parent.fullscreenSwipeNext;
-                if (touchendX > touchstartX + 60 && window.parent.hasFullscreenPrev) window.parent.location.search = window.parent.fullscreenSwipePrev;
-            }}, {{passive: true}});
-            window.parent.fullscreenSwipeListenerAdded = true;
+        
+        if (window.parent.handleTouchStart) {{
+            window.parent.document.removeEventListener('touchstart', window.parent.handleTouchStart);
+            window.parent.document.removeEventListener('touchend', window.parent.handleTouchEnd);
         }}
+        
+        window.parent.handleTouchStart = function(e) {{
+            window.parent.touchstartX = e.changedTouches[0].screenX;
+        }};
+        
+        window.parent.handleTouchEnd = function(e) {{
+            window.parent.touchendX = e.changedTouches[0].screenX;
+            let diff = window.parent.touchstartX - window.parent.touchendX;
+            if (diff > 50 && window.parent.hasFullscreenNext) {{
+                window.parent.location.href = window.parent.location.pathname + window.parent.fullscreenSwipeNext;
+            }} else if (diff < -50 && window.parent.hasFullscreenPrev) {{
+                window.parent.location.href = window.parent.location.pathname + window.parent.fullscreenSwipePrev;
+            }}
+        }};
+        
+        window.parent.document.addEventListener('touchstart', window.parent.handleTouchStart, {{passive: true}});
+        window.parent.document.addEventListener('touchend', window.parent.handleTouchEnd, {{passive: true}});
     </script>
     """, height=0)
     st.stop()
@@ -792,17 +862,17 @@ def render_story_fullscreen(group_idx, story_idx):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # Clean 3-Dot Hover Menu for Story Reactions
+    # Reaction Hover Menu
     emojis = ["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]
     react_html = '<div class="story-menu"><div class="story-menu-btn">⋮</div><div class="story-menu-content">'
     for em in emojis:
-        r_link = get_nav_link(page="app", folder="root", story_group=group_idx, story_idx=story_idx, react=em)
+        # Pass exact file ID to guarantee reaction registers correctly
+        r_link = get_nav_link(page="app", folder="root", story_group=group_idx, story_idx=story_idx, react=em, file_id=str(item["_id"]))
         react_html += f'<a href="{r_link}" target="_self" class="story-react-btn">{em}</a>'
     react_html += '</div></div>'
 
-    # Progress bar CSS & DOM
     lightbox_ui = f"""
-    <div id="lightbox" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; box-sizing: border-box; background: #000000; z-index: 9999999; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+    <div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; box-sizing: border-box; background: #000000; z-index: 9999999; display: flex; flex-direction: column; align-items: center; justify-content: center;">
         <style>
             .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; transition: transform 0.2s ease; cursor: pointer; z-index: 10000000; }} 
             .liquid-btn:hover {{ background: rgba(255, 255, 255, 0.3); transform: scale(1.1); color: white; }} 
@@ -813,11 +883,7 @@ def render_story_fullscreen(group_idx, story_idx):
             .story-menu::after {{ content: ''; position: absolute; top: 100%; left: 0; width: 100%; height: 20px; }}
             .story-react-btn {{ font-size: 28px; text-decoration: none; transition: transform 0.2s ease; cursor: pointer; line-height: 1; }} 
             .story-react-btn:hover {{ transform: scale(1.3); }}
-            .progress-bar-container {{ position: absolute; top: 10px; left: 5%; width: 90%; height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px; overflow: hidden; z-index: 10000000; }}
-            .progress-bar-fill {{ height: 100%; width: 0%; background: white; animation: progress 15s linear forwards; }}
-            @keyframes progress {{ to {{ width: 100%; }} }}
         </style>
-        <div class="progress-bar-container"><div class="progress-bar-fill"></div></div>
         <a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>
         {react_html}
         <div style="position: absolute; top: 30px; color: white; font-family: sans-serif; font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); z-index: 10000000; margin-left: 80px;">{html.escape(group['label'])}</div>
@@ -833,22 +899,27 @@ def render_story_fullscreen(group_idx, story_idx):
         window.parent.fullscreenSwipeNext = "{next_search}"; window.parent.fullscreenSwipePrev = "{prev_search}";
         window.parent.hasFullscreenNext = {has_next}; window.parent.hasFullscreenPrev = {has_prev};
         
-        if (window.parent.storyTimer) clearTimeout(window.parent.storyTimer);
-        window.parent.storyTimer = setTimeout(() => {{
-            if (window.parent.hasFullscreenNext) window.parent.location.search = window.parent.fullscreenSwipeNext;
-            else window.parent.location.search = "{close_search}";
-        }}, 15000);
-
-        if (!window.parent.fullscreenSwipeListenerAdded) {{
-            let touchstartX = 0; let touchendX = 0;
-            window.parent.document.addEventListener('touchstart', e => {{ touchstartX = e.changedTouches[0].screenX; }}, {{passive: true}});
-            window.parent.document.addEventListener('touchend', e => {{
-                touchendX = e.changedTouches[0].screenX;
-                if (touchendX < touchstartX - 60 && window.parent.hasFullscreenNext) window.parent.location.search = window.parent.fullscreenSwipeNext;
-                if (touchendX > touchstartX + 60 && window.parent.hasFullscreenPrev) window.parent.location.search = window.parent.fullscreenSwipePrev;
-            }}, {{passive: true}});
-            window.parent.fullscreenSwipeListenerAdded = true;
+        if (window.parent.handleTouchStart) {{
+            window.parent.document.removeEventListener('touchstart', window.parent.handleTouchStart);
+            window.parent.document.removeEventListener('touchend', window.parent.handleTouchEnd);
         }}
+        
+        window.parent.handleTouchStart = function(e) {{
+            window.parent.touchstartX = e.changedTouches[0].screenX;
+        }};
+        
+        window.parent.handleTouchEnd = function(e) {{
+            window.parent.touchendX = e.changedTouches[0].screenX;
+            let diff = window.parent.touchstartX - window.parent.touchendX;
+            if (diff > 50 && window.parent.hasFullscreenNext) {{
+                window.parent.location.href = window.parent.location.pathname + window.parent.fullscreenSwipeNext;
+            }} else if (diff < -50 && window.parent.hasFullscreenPrev) {{
+                window.parent.location.href = window.parent.location.pathname + window.parent.fullscreenSwipePrev;
+            }}
+        }};
+        
+        window.parent.document.addEventListener('touchstart', window.parent.handleTouchStart, {{passive: true}});
+        window.parent.document.addEventListener('touchend', window.parent.handleTouchEnd, {{passive: true}});
     </script>
     """, height=0)
     st.stop()
@@ -993,7 +1064,10 @@ else:
     inject_global_css()
     st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container { max-width: 100% !important; padding-top: 1rem !important; }</style>", unsafe_allow_html=True)
 
-    # Intercept Dialogs
+    # Invisible 5-Minute Auto-Refresh embedded at top
+    components.html('<script>setTimeout(function(){ window.parent.location.reload(); }, 300000);</script>', height=0)
+
+    # Intercept Full-Screen Dialogs
     if "share_folder" in st.query_params: share_media_dialog(st.query_params["share_folder"], mode="folder")
     if "ai_chat" in st.query_params: render_ai_chat_dialog()
     if "profile_hub" in st.query_params: render_profile_hub_fullscreen()
@@ -1014,12 +1088,13 @@ else:
                 delete_file_dialog(file_to_del["_id"], file_to_del["public_id"], file_to_del["resource_type"])
         except Exception: pass
         st.session_state.pending_delete = None
+        
+    if st.session_state.get("pending_move"):
+        move_media_dialog(st.session_state.pending_move)
 
     if st.session_state.get("pending_locked_react"):
         locked_reaction_dialog(st.session_state.pending_locked_react)
         st.session_state.pending_locked_react = None
-
-    components.html('<script>if (window.parent.storyTimer) { clearTimeout(window.parent.storyTimer); window.parent.storyTimer = null; }</script>', height=0)
 
     user_data = users_col.find_one({"username": st.session_state.username})
     root_folder = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
@@ -1029,7 +1104,7 @@ else:
     current = folders_col.find_one({"_id": actual_folder_id})
     is_root = current is None or current.get("parent_id") is None
 
-    # --- TOP NAV WITH NO TEXT LINKS (Clean & Mobile Friendly) ---
+    # --- TOP NAV WITH NO TEXT LINKS ---
     prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
     display_name = html.escape(user_data.get("first_name", st.session_state.username))
     
@@ -1040,8 +1115,7 @@ else:
     unread_notifs = list(notifications_col.find({"username": st.session_state.username, "is_read": False}).sort("created_at", -1))
     notif_dot_html = '<div class="profile-notif-dot"></div>' if unread_notifs else ''
 
-    # Top nav universally contains logo (Home) and Action Widgets. 
-    # Notice: the profile icon is hidden if you are inside a folder to keep it clean.
+    # Profile Widget hidden inside folders for clean view. Logo acts as Home.
     prof_widget = f'<a href="{prof_link}" target="_self" class="profile-header-widget"><img src="{html.escape(prof_pic)}"><span>{display_name}</span>{notif_dot_html}</a>' if is_root else ""
 
     header_html = f'''
@@ -1097,7 +1171,7 @@ else:
 
         c_title, c_actions = st.columns([10, 2])
         
-        # In Folders, replace redundant text link with a clean ⬅️ Title format
+        # Clean folder header (No redundant Back text)
         if is_root:
             c_title.markdown(f'<h2 style="margin:0;">{title_text}</h2>', unsafe_allow_html=True)
         else:
@@ -1121,7 +1195,6 @@ else:
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     st.markdown("**Sharing & Privacy**")
                     
-                    # BATCH SHARE TRIGGER (Safe inside Options instead of destroying grid)
                     if st.button("🔗 Share Media Batch", key=f"share_folder_{current['_id']}", use_container_width=True):
                         st.query_params["share_folder"] = str(current['_id']); st.rerun()
                         
@@ -1167,7 +1240,7 @@ else:
                         html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
-        # Clean Media Grid (NO Checkboxes, NO 3-Dots. Action buttons moved to Lightbox)
+        # Pure Grid (No Checkboxes or 3-Dots. Action buttons exist ONLY in Lightbox)
         if files:
             st.write("<br>", unsafe_allow_html=True)
             img_cols = st.columns(4)
@@ -1184,12 +1257,12 @@ else:
                     lb_url = f"?page=app&folder={safe_folder_id}&lightbox_idx={i}&session={session_token}"
                     safe_url = html.escape(file["url"])
                     
-                    # Wrap entire item in lightbox link. Muted autoplay for videos with pointer-events: none
-                    media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none;">'
+                    # Entire thumbnail acts as a button. Videos autoplay looped, shielded by a click-plate.
+                    media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
                         media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
                     else:
-                        media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;"></video></div>'
+                        media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
                     media_html += '</a>'
                     
                     st.markdown(media_html.replace('\n', ''), unsafe_allow_html=True)
