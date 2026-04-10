@@ -60,3 +60,38 @@ Database	MongoDB (PyMongo)
 Media Hosting	Cloudinary
 Visualization	Plotly
 Styling	CSS3 (Glassmorphism)
+
+
+# voidememo 🌐
+
+**The Private Digital Bibliotheca.**
+
+voidememo is a high-performance, secure cloud storage vault designed with the aesthetics of an admin dashboard and the engagement loop of modern social platforms. It prioritizes data privacy, multi-profile account isolation, and fluid user interaction without relying on traditional social feeds.
+
+Built entirely in Python via Streamlit, utilizing MongoDB for metadata and Cloudinary for enterprise-grade asset caching.
+
+## ✨ Core Features
+
+* 🔐 **Biometric-Grade OTP Authentication:** Passwords are mathematically hashed (SHA-256 + Pepper), and session ingress is guarded by Time-Based One-Time Passwords (OTPs) dispatched via SMTP.
+* 👥 **Multi-Profile Isolation:** A single verified email address can host up to 5 distinct, completely isolated memory vaults (e.g., Personal, Work, Family). Profile generation enforces phone-number validation anti-spam logic.
+* 📱 **Immersive Full-Screen Lightbox:** The frontend boasts a completely fluid, `target="_self"` DOM-manipulated image and video viewer. Videos loop silently within circular masonry grids and seamlessly expand to full 1080p playback upon interaction.
+* 📖 **Deterministic Stories:** The engine generates dynamic timeline stories. It automatically calculates interaction vectors, isolating media reacted to within the last week into a `"Previous week's favs ⭐"` ring.
+* 🔗 **Decentralized Sharing Engine:** Users can transmit entire batches of encrypted media metadata to proximate users using local PIN codes, or query users globally. 
+* 🤖 **Vault AI Assistant:** A localized data-parsing AI engine that queries your NoSQL document arrays to retrieve specific metrics about your vault in real-time.
+
+## 🛠️ Technical Architecture
+
+| Component | Technology |
+| :--- | :--- |
+| **Language** | Python 3.12+ |
+| **Frontend Framework** | Streamlit (w/ Deep CSS/JS Component Injection) |
+| **Database Architecture** | MongoDB Atlas (PyMongo - BSON Object Serialization) |
+| **Media Delivery Network** | Cloudinary API (Multipart chunking for >50MB files) |
+| **Security Protocol** | Certifi TLS 1.3, SHA-256 Hashing |
+
+## 🚀 Installation & Deployment
+
+### 1. Clone the Repository
+```bash
+git clone [https://github.com/yourusername/voidememo.git](https://github.com/yourusername/voidememo.git)
+cd voidememo
