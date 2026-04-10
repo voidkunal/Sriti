@@ -157,7 +157,7 @@ if not st.session_state.logged_in and "session" in st.query_params:
         st.session_state.logged_in = True
         st.session_state.username = user["username"]
 
-# --- HANDLE LIGHTBOX ACTIONS & STORY REACTIONS ---
+# --- HANDLE LIGHTBOX ACTIONS & STORY REACTIONS (Pre-Render Routing) ---
 if st.session_state.logged_in:
     if "action" in st.query_params and "file_id" in st.query_params:
         try:
@@ -227,6 +227,7 @@ if st.session_state.logged_in:
             age_days = (now - upload_date).days
             if age_days <= 7: recent.append(f)
             
+            # WEEKLY FAVORITES LOGIC (Tag age > 7 days)
             if f.get("tag"):
                 tag_age_seconds = time.time() - f.get("tag_time", 0)
                 if tag_age_seconds >= 604800: # 7 Days
@@ -278,6 +279,11 @@ def inject_global_css():
     div[data-testid="stAppViewBlockContainer"] { z-index: 10 !important; padding-top: 1rem !important; }
     div[data-testid="stMarkdownContainer"] { position: relative; z-index: 50; pointer-events: auto !important; }
 
+    .title-text { color: var(--text-primary) !important; font-weight: 800; font-size: 32px; text-align: center; margin-bottom: 5px; }
+    .sub-text { color: var(--text-secondary) !important; font-size: 15px; text-align: center; margin-bottom: 30px; }
+    .brand-logo { font-size: 24px; font-weight: 800; color: var(--accent) !important; letter-spacing: 0.5px; text-decoration: none; }
+    .muted-text { color: var(--text-secondary) !important; }
+
     .auth-container, .content-card {
         max-width: 480px !important; width: 90% !important; background-color: var(--bg-card) !important;
         padding: 50px 40px !important; border-radius: 20px !important; border: 1px solid var(--border) !important; margin: 8vh auto !important; 
@@ -297,15 +303,6 @@ def inject_global_css():
     .native-link { color: var(--accent) !important; text-decoration: none; font-weight: 600; cursor: pointer;} .native-link:hover { text-decoration: underline; }
     
     .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 9999999 !important; pointer-events: auto !important; margin-bottom: 20px; }
-    .brand-logo { font-size: 24px; font-weight: 800; color: var(--accent) !important; letter-spacing: 0.5px; text-decoration: none; }
-
-    /* New Landing Page UI */
-    .hero-title { font-size: 4rem; font-weight: 900; text-align: center; background: linear-gradient(90deg, var(--accent), #d946ef); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-top: 3rem; margin-bottom: 10px; line-height: 1.1; }
-    .hero-subtitle { font-size: 1.25rem; color: var(--text-secondary); text-align: center; max-width: 600px; margin: 0 auto 3rem auto; font-weight: 500; }
-    .feature-box { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 25px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.05); margin-bottom: 20px;}
-    .feature-icon { font-size: 32px; margin-bottom: 10px; }
-    .feature-title { font-size: 18px; font-weight: 700; margin-bottom: 5px; color: var(--text-primary); }
-    .feature-desc { font-size: 14px; color: var(--text-secondary); }
 
     .dashboard-title { font-size: 32px; font-weight: 800; color: var(--text-primary); margin: 0; }
     
@@ -328,6 +325,7 @@ def inject_global_css():
     .media-container-wrapper { position: relative; margin-bottom: 15px; cursor: pointer; }
     .media-container-wrapper:hover .square-media { transform: scale(1.02); }
     
+    /* PERFECT CIRCULAR GRID LOGIC */
     .square-media { width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: var(--bg-card); border: 1px solid var(--border); }
     .square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
     
@@ -358,7 +356,6 @@ def inject_global_css():
     .gallery-title { color: white; font-size: 15px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
 
     @media (max-width: 768px) {
-        .hero-title { font-size: 2.5rem; margin-top: 2rem; }
         .auth-container, .content-card { border: none !important; border-radius: 0 !important; padding: 30px 20px !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; pointer-events: auto !important;}
         .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; z-index: 9999999 !important; pointer-events: auto !important;}
         .brand-logo { font-size: 28px; margin-bottom: 10px;}
@@ -368,7 +365,6 @@ def inject_global_css():
     </style>
     """
     st.markdown(css.replace('\n', ''), unsafe_allow_html=True)
-
 
 # ================= DIALOG FUNCTIONS =================
 @st.dialog("⚠️ Confirm Deletion")
@@ -453,14 +449,13 @@ def share_media_dialog(target_data, mode):
             if not folder_files:
                 st.info("No media files found to share in this folder.")
                 if st.button("Close"): 
-                    if "share_folder" in st.query_params: del st.query_params["share_folder"]
                     st.rerun()
                 return
             st.markdown("### 1. Select Media to Share")
             media_options = {html.escape(f['filename']) if f.get('filename') else str(f['_id']): f['_id'] for f in folder_files}
             selected_media_filenames = st.multiselect("Choose files from this album:", list(media_options.keys()), default=list(media_options.keys()), key="ms_media")
             selected_media_ids = [media_options[name] for name in selected_media_filenames]
-        else: # single file
+        else:
             selected_media_ids = [ObjectId(target_data)]
             st.markdown("### 1. Share File")
             file_doc = files_col.find_one({"_id": selected_media_ids[0]})
@@ -503,13 +498,13 @@ def share_media_dialog(target_data, mode):
             notifications_col.insert_one({"username": u, "sender": st.session_state.username, "type": "share", "share_id": share_res.inserted_id, "message": msg_text, "is_read": False, "created_at": time.time()})
         st.success("Shared successfully!")
         time.sleep(1)
-        if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.session_state.pending_share = None
+        if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.rerun()
         
     if c2.button("Cancel", use_container_width=True):
-        if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.session_state.pending_share = None
+        if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.rerun()
 
 @st.dialog("📬 Shared Media Preview", width="large")
@@ -524,8 +519,10 @@ def preview_shared_dialog(notif_id_str):
         if st.button("Close"): del st.query_params["preview_notif"]; st.rerun()
         return
 
+    # STRICT Reaction Preview Context
     if notif.get("type") == "share_reaction":
         st.info(f"**{html.escape(notif['sender'])}** {html.escape(notif['message'])}")
+        
         share_id_val = notif.get("share_id")
         if isinstance(share_id_val, str): share_id_val = ObjectId(share_id_val)
         share = shares_col.find_one({"_id": share_id_val}) if share_id_val else None
@@ -550,7 +547,7 @@ def preview_shared_dialog(notif_id_str):
             st.rerun()
         return
 
-    # Standard Share Review
+    # Standard Share Content Display
     share = shares_col.find_one({"_id": notif.get("share_id")})
     media_ids = share.get("media_ids", []) if share else []
     if not media_ids:
@@ -572,6 +569,8 @@ def preview_shared_dialog(notif_id_str):
             else:
                 vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                 st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
+            with st.popover("⋮"):
+                st.markdown(f'<a href="{safe_preview_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
             
     st.markdown("<hr style='border-color: rgba(255,255,255,0.2); margin-top: 30px;'>", unsafe_allow_html=True)
@@ -589,6 +588,7 @@ def preview_shared_dialog(notif_id_str):
         root = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
         root_id = root["_id"] if root else None
         
+        # EXACT SINGLE FOLDER RESOLUTION
         shared_folder = folders_col.find_one({"username": st.session_state.username, "folder_name": {"$regex": "^Shared Media$", "$options": "i"}, "parent_id": root_id})
         if not shared_folder:
             res = folders_col.insert_one({"username": st.session_state.username, "folder_name": "Shared Media", "parent_id": root_id, "cover_photo": "", "is_locked": False})
@@ -610,6 +610,7 @@ def preview_shared_dialog(notif_id_str):
 
 @st.dialog("👤 Profile Hub", width="large")
 def render_profile_hub_fullscreen():
+    # Enforces full screen behavior properly managed via state
     st.markdown("""<style>
         div[data-testid="stDialog"] > div[role="dialog"] { width: 100vw !important; max-width: 100vw !important; height: 100vh !important; max-height: 100vh !important; margin: 0 !important; border-radius: 0 !important; background: var(--bg-app) !important; padding: 40px 5% !important; overflow-y: auto !important;}
         div[data-testid="stDialog"] button[aria-label="Close"] { top: 20px; right: 20px; transform: scale(1.5); }
@@ -628,8 +629,6 @@ def render_profile_hub_fullscreen():
             new_email = st.text_input("Email", value=user_data.get("email", ""), disabled=True)
             new_phone = st.text_input("Phone Number", value=user_data.get("phone_number", ""))
             bio = st.text_area("Bio", value=user_data.get("bio", ""))
-            
-            # File upload decoupled from form block logic to ensure stability
             pic = st.file_uploader("Profile Photo", key="profile_pic_upload")
             
             if st.button("Save Changes", type="primary"):
@@ -701,7 +700,7 @@ def render_profile_hub_fullscreen():
                         notifications_col.update_one({"_id": n['_id']}, {"$set": {"is_read": True}})
                         if n.get("type") in ["share", "share_reaction"]: 
                             st.query_params["preview_notif"] = str(n['_id'])
-                        st.rerun()
+                        del st.query_params["profile_hub"]; st.rerun()
                 with col_del:
                     if st.button("❌", key=f"deln_{n['_id']}", help="Delete notification"):
                         notifications_col.delete_one({"_id": n['_id']})
@@ -821,26 +820,9 @@ def render_lightbox_fullscreen(idx, folder_id_str):
         
     current_react = f"<div style='position:absolute; top:25px; left:25px; font-size: 32px; z-index:10000000;'>{html.escape(file.get('tag', ''))}</div>" if file.get("tag") else ""
 
-    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>{current_react}{action_html}{react_html}{prev_button}{next_button}{media_element}</div>"""
+    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>{current_react}{action_html}{react_html} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
 
-    components.html(f"""
-    <script>
-        if (window.parent.handleTouchStart) {{
-            window.parent.document.removeEventListener('touchstart', window.parent.handleTouchStart);
-            window.parent.document.removeEventListener('touchend', window.parent.handleTouchEnd);
-        }}
-        window.parent.handleTouchStart = function(e) {{ window.parent.touchstartX = e.changedTouches[0].screenX; }};
-        window.parent.handleTouchEnd = function(e) {{
-            window.parent.touchendX = e.changedTouches[0].screenX;
-            let diff = window.parent.touchstartX - window.parent.touchendX;
-            if (diff > 50 && "{next_search}" != "" && {has_next}) window.parent.location.search = "{next_search}";
-            if (diff < -50 && "{prev_search}" != "" && {has_prev}) window.parent.location.search = "{prev_search}";
-        }};
-        window.parent.document.addEventListener('touchstart', window.parent.handleTouchStart, {{passive: true}});
-        window.parent.document.addEventListener('touchend', window.parent.handleTouchEnd, {{passive: true}});
-    </script>
-    """, height=0)
     st.stop()
 
 def render_story_fullscreen(group_idx, story_idx):
@@ -873,6 +855,7 @@ def render_story_fullscreen(group_idx, story_idx):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
+    # Clean 3-Dot Hover Menu for Story Reactions
     emojis = ["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]
     react_html = '<div class="story-menu"><div class="story-menu-btn">⋮</div><div class="story-menu-content">'
     for em in emojis:
@@ -896,30 +879,14 @@ def render_story_fullscreen(group_idx, story_idx):
         <a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>
         {react_html}
         <div style="position: absolute; top: 30px; color: white; font-family: sans-serif; font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); z-index: 10000000; margin-left: 80px;">{html.escape(group['label'])}</div>
+        <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a>
+        <a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a>
         {prev_button}{next_button}
         <div style="position: absolute; bottom: 30px; color: white; font-family: sans-serif; font-size: 15px; font-weight: 600; background: rgba(255,255,255,0.15); padding: 8px 24px; border-radius: 30px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); letter-spacing: 1px; z-index: 10000000;">{story_idx + 1} / {len(items)}</div>
         {media_element}
     </div>
     """
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
-
-    components.html(f"""
-    <script>
-        if (window.parent.handleTouchStart) {{
-            window.parent.document.removeEventListener('touchstart', window.parent.handleTouchStart);
-            window.parent.document.removeEventListener('touchend', window.parent.handleTouchEnd);
-        }}
-        window.parent.handleTouchStart = function(e) {{ window.parent.touchstartX = e.changedTouches[0].screenX; }};
-        window.parent.handleTouchEnd = function(e) {{
-            window.parent.touchendX = e.changedTouches[0].screenX;
-            let diff = window.parent.touchstartX - window.parent.touchendX;
-            if (diff > 50 && "{next_search}" != "" && {has_next}) window.parent.location.search = "{next_search}";
-            if (diff < -50 && "{prev_search}" != "" && {has_prev}) window.parent.location.search = "{prev_search}";
-        }};
-        window.parent.document.addEventListener('touchstart', window.parent.handleTouchStart, {{passive: true}});
-        window.parent.document.addEventListener('touchend', window.parent.handleTouchEnd, {{passive: true}});
-    </script>
-    """, height=0)
     st.stop()
 
 
@@ -1277,7 +1244,7 @@ else:
                         html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
-        # Pure Circular Grid (No Action Buttons in grid, only in Lightbox)
+        # Pure Circular Grid (No Checkboxes or 3-Dots. Action buttons exist ONLY in Lightbox)
         if files:
             st.write("<br>", unsafe_allow_html=True)
             img_cols = st.columns(4)
