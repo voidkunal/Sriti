@@ -44,6 +44,14 @@ def hash_password(password):
     pepper = st.secrets.get("APP_PEPPER", "")
     return hashlib.sha256((pwd_str + pepper).encode()).hexdigest()
 
+def time_ago(ts):
+    if not ts: return ""
+    diff = time.time() - ts
+    if diff < 60: return "Just now"
+    elif diff < 3600: return f"{int(diff//60)}m ago"
+    elif diff < 86400: return f"{int(diff//3600)}h ago"
+    else: return f"{int(diff//86400)}d ago"
+
 def register(email, password, first_name, last_name, birthday, pin_code, phone_number):
     email = str(email).strip().lower()
     existing_count = users_col.count_documents({"email": email})
@@ -96,8 +104,8 @@ def send_otp_email(receiver_email, otp):
         msg = MIMEMultipart()
         msg['From'] = sender_email
         msg['To'] = str(receiver_email).strip()
-        msg['Subject'] = "voidememo - Password Reset Security Code"
-        body = f"Hello,\n\nYou requested a password reset. Your secure 6-digit code is: {otp}\n\nThis code will expire in 10 minutes. If you did not request this, secure your account immediately."
+        msg['Subject'] = "voidememo - Vault Security Code"
+        body = f"Hello,\n\nYour secure 6-digit access code is: {otp}\n\nThis code will expire in 10 minutes. If you did not request this, secure your account immediately."
         msg.attach(MIMEText(body, 'plain'))
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -135,7 +143,8 @@ active_folder = st.query_params.get("folder", "root")
 defaults = {
     "logged_in": False, "username": "", "reset_step": 0, "reset_email": "",
     "uploader_key": 0, "folder_key": 0, "story_groups": [], "pending_share": None,
-    "pending_delete": None, "pending_locked_react": None, "pending_move": None
+    "pending_delete": None, "pending_locked_react": None, "pending_move": None,
+    "login_step": 0, "login_email": ""
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -148,7 +157,7 @@ if not st.session_state.logged_in and "session" in st.query_params:
         st.session_state.logged_in = True
         st.session_state.username = user["username"]
 
-# --- HANDLE LIGHTBOX ACTIONS & STORY REACTIONS ---
+# --- HANDLE LIGHTBOX ACTIONS & STORY REACTIONS (Pre-Render Routing) ---
 if st.session_state.logged_in:
     if "action" in st.query_params and "file_id" in st.query_params:
         try:
@@ -163,7 +172,7 @@ if st.session_state.logged_in:
                     st.session_state.pending_move = str(fid)
                 elif action == "locked_react":
                     time_elapsed = time.time() - file.get("tag_time", 0)
-                    st.session_state.pending_locked_react = 86400 - time_elapsed
+                    st.session_state.pending_locked_react = max(0, 86400 - time_elapsed)
                 elif action == "pin":
                     if file.get("pin_order", 0) > 0:
                         files_col.update_one({"_id": fid}, {"$unset": {"pin_order": ""}})
@@ -190,7 +199,6 @@ if st.session_state.logged_in:
                 fid = ObjectId(st.query_params["file_id"])
                 files_col.update_one({"_id": fid}, {"$set": {"tag": st.query_params["react"], "tag_time": time.time()}})
             elif "story_group" in st.query_params and "story_idx" in st.query_params:
-                # Direct story reaction catch
                 s_grp = int(st.query_params["story_group"])
                 s_idx = int(st.query_params["story_idx"])
                 if s_grp < len(st.session_state.story_groups):
@@ -198,10 +206,6 @@ if st.session_state.logged_in:
                     if s_idx < len(items):
                         file_id = items[s_idx]["_id"]
                         files_col.update_one({"_id": file_id}, {"$set": {"tag": st.query_params["react"], "tag_time": time.time()}})
-            else:
-                favorites = list(files_col.find({"username": st.session_state.username, "tag": {"$ne": ""}}).sort("_id", -1).limit(1))
-                if favorites:
-                    files_col.update_one({"_id": favorites[0]["_id"]}, {"$set": {"tag": st.query_params["react"], "tag_time": time.time()}})
         except Exception: pass
         del st.query_params["react"]
         if "file_id" in st.query_params: del st.query_params["file_id"]
@@ -222,7 +226,13 @@ if st.session_state.logged_in:
             upload_date = f["_id"].generation_time
             age_days = (now - upload_date).days
             if age_days <= 7: recent.append(f)
-            if f.get("tag"): favorites.append(f)
+            
+            # WEEKLY FAVORITES LOGIC (Tag age > 7 days)
+            if f.get("tag"):
+                tag_age_seconds = time.time() - f.get("tag_time", 0)
+                if tag_age_seconds >= 604800: # 7 Days
+                    favorites.append(f)
+                    
             if age_days > 30: throwback.append(f)
                 
         if recent:
@@ -233,7 +243,7 @@ if st.session_state.logged_in:
             story_groups.append({"label": "Memory Lane", "items": throwback[:6]})
         if favorites:
             random.shuffle(favorites)
-            story_groups.append({"label": "⭐", "items": favorites[:6]})
+            story_groups.append({"label": "Previous week's favs ⭐", "items": favorites[:6]})
             
         random_media = all_user_media[:]
         random.shuffle(random_media)
@@ -314,8 +324,10 @@ def inject_global_css():
 
     .media-container-wrapper { position: relative; margin-bottom: 15px; cursor: pointer; }
     .media-container-wrapper:hover .square-media { transform: scale(1.02); }
-    .square-media { width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: var(--bg-card); border: 1px solid var(--border); }
-    .square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; }
+    
+    /* PERFECT CIRCULAR GRID LOGIC */
+    .square-media { width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: var(--bg-card); border: 1px solid var(--border); }
+    .square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
     
     [data-testid="column"] { position: relative; }
     .folder-options-btn [data-testid="stPopover"] > button {
@@ -353,7 +365,6 @@ def inject_global_css():
     </style>
     """
     st.markdown(css.replace('\n', ''), unsafe_allow_html=True)
-
 
 # ================= DIALOG FUNCTIONS =================
 @st.dialog("⚠️ Confirm Deletion")
@@ -438,14 +449,13 @@ def share_media_dialog(target_data, mode):
             if not folder_files:
                 st.info("No media files found to share in this folder.")
                 if st.button("Close"): 
-                    if "share_folder" in st.query_params: del st.query_params["share_folder"]
                     st.rerun()
                 return
             st.markdown("### 1. Select Media to Share")
             media_options = {html.escape(f['filename']) if f.get('filename') else str(f['_id']): f['_id'] for f in folder_files}
             selected_media_filenames = st.multiselect("Choose files from this album:", list(media_options.keys()), default=list(media_options.keys()), key="ms_media")
             selected_media_ids = [media_options[name] for name in selected_media_filenames]
-        else: # single file
+        else:
             selected_media_ids = [ObjectId(target_data)]
             st.markdown("### 1. Share File")
             file_doc = files_col.find_one({"_id": selected_media_ids[0]})
@@ -488,13 +498,13 @@ def share_media_dialog(target_data, mode):
             notifications_col.insert_one({"username": u, "sender": st.session_state.username, "type": "share", "share_id": share_res.inserted_id, "message": msg_text, "is_read": False, "created_at": time.time()})
         st.success("Shared successfully!")
         time.sleep(1)
-        if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.session_state.pending_share = None
+        if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.rerun()
         
     if c2.button("Cancel", use_container_width=True):
-        if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.session_state.pending_share = None
+        if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.rerun()
 
 @st.dialog("📬 Shared Media Preview", width="large")
@@ -509,32 +519,35 @@ def preview_shared_dialog(notif_id_str):
         if st.button("Close"): del st.query_params["preview_notif"]; st.rerun()
         return
 
-    # Handle explicit share_reaction preview rendering
+    # STRICT Reaction Preview Context
     if notif.get("type") == "share_reaction":
         st.info(f"**{html.escape(notif['sender'])}** {html.escape(notif['message'])}")
         
-        # Display the media they reacted to
-        share = shares_col.find_one({"_id": notif.get("share_id")}) if notif.get("share_id") else None
+        share_id_val = notif.get("share_id")
+        if isinstance(share_id_val, str): share_id_val = ObjectId(share_id_val)
+        share = shares_col.find_one({"_id": share_id_val}) if share_id_val else None
+        
         if share and share.get("media_ids"):
-            files_to_preview = list(files_col.find({"_id": {"$in": share.get("media_ids")[:1]}})) # Show preview of first item
+            files_to_preview = list(files_col.find({"_id": {"$in": share.get("media_ids")[:1]}}))
             if files_to_preview:
                 p_file = files_to_preview[0]
                 safe_preview_url = html.escape(p_file["url"])
-                st.markdown('<div class="media-container-wrapper" style="width: 200px;">', unsafe_allow_html=True)
+                st.write("They reacted to this memory:")
+                st.markdown('<div class="media-container-wrapper" style="width: 150px; margin: 0 auto;">', unsafe_allow_html=True)
                 if p_file["resource_type"] == "image":
                     st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
                 else:
                     vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                     st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown('</div><br>', unsafe_allow_html=True)
 
-        if st.button("Mark as Read & Close"):
+        if st.button("Mark as Read & Close", use_container_width=True):
             notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
             del st.query_params["preview_notif"]
             st.rerun()
         return
 
-    # Standard Share display
+    # Standard Share Content Display
     share = shares_col.find_one({"_id": notif.get("share_id")})
     media_ids = share.get("media_ids", []) if share else []
     if not media_ids:
@@ -556,6 +569,8 @@ def preview_shared_dialog(notif_id_str):
             else:
                 vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                 st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
+            with st.popover("⋮"):
+                st.markdown(f'<a href="{safe_preview_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
             
     st.markdown("<hr style='border-color: rgba(255,255,255,0.2); margin-top: 30px;'>", unsafe_allow_html=True)
@@ -573,7 +588,8 @@ def preview_shared_dialog(notif_id_str):
         root = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
         root_id = root["_id"] if root else None
         
-        shared_folder = folders_col.find_one({"username": st.session_state.username, "folder_name": "Shared Media", "parent_id": root_id})
+        # EXACT SINGLE FOLDER RESOLUTION
+        shared_folder = folders_col.find_one({"username": st.session_state.username, "folder_name": {"$regex": "^Shared Media$", "$options": "i"}, "parent_id": root_id})
         if not shared_folder:
             res = folders_col.insert_one({"username": st.session_state.username, "folder_name": "Shared Media", "parent_id": root_id, "cover_photo": "", "is_locked": False})
             dest_f_id = res.inserted_id
@@ -594,8 +610,9 @@ def preview_shared_dialog(notif_id_str):
 
 @st.dialog("👤 Profile Hub", width="large")
 def render_profile_hub_fullscreen():
+    # Enforces full screen behavior properly managed via state
     st.markdown("""<style>
-        div[data-testid="stDialog"] > div[role="dialog"] { width: 100vw !important; max-width: 100vw !important; height: 100vh !important; max-height: 100vh !important; margin: 0 !important; border-radius: 0 !important; background: var(--bg-app) !important; padding: 40px 5% !important; }
+        div[data-testid="stDialog"] > div[role="dialog"] { width: 100vw !important; max-width: 100vw !important; height: 100vh !important; max-height: 100vh !important; margin: 0 !important; border-radius: 0 !important; background: var(--bg-app) !important; padding: 40px 5% !important; overflow-y: auto !important;}
         div[data-testid="stDialog"] button[aria-label="Close"] { top: 20px; right: 20px; transform: scale(1.5); }
     </style>""", unsafe_allow_html=True)
     
@@ -650,14 +667,22 @@ def render_profile_hub_fullscreen():
                 st.query_params.clear(); st.rerun()
 
     with p_tab2:
+        if st.query_params.get("confirm_all_read", "").lower() == "true":
+             notifications_col.update_many({"username": st.session_state.username}, {"$set": {"is_read": True}})
+             st.query_params.pop("confirm_all_read", None)
+             st.success("All read!"); time.sleep(1); st.rerun()
+
+        if st.query_params.get("confirm_clear_all", "").lower() == "true":
+             notifications_col.delete_many({"username": st.session_state.username})
+             st.query_params.pop("confirm_clear_all", None)
+             st.success("All cleared!"); time.sleep(1); st.rerun()
+
         st.markdown("### Your Notifications")
         ca, cb = st.columns(2)
         if ca.button("✔️ Mark All Read", use_container_width=True):
-            notifications_col.update_many({"username": st.session_state.username}, {"$set": {"is_read": True}})
-            st.rerun()
+            st.query_params["confirm_all_read"] = "true"; st.rerun()
         if cb.button("🗑️ Clear All", use_container_width=True):
-            notifications_col.delete_many({"username": st.session_state.username})
-            st.rerun()
+            st.query_params["confirm_clear_all"] = "true"; st.rerun()
             
         st.markdown("<hr style='margin: 15px 0; border-color: var(--border);'>", unsafe_allow_html=True)
 
@@ -667,11 +692,14 @@ def render_profile_hub_fullscreen():
             for n in notifs:
                 col_msg, col_del = st.columns([11, 1], vertical_alignment="center")
                 status = "🟢" if not n.get("is_read") else "⚪"
+                t_ago = time_ago(n.get("created_at", time.time()))
                 
                 with col_msg:
-                    if st.button(f"{status} {html.escape(n['sender'])} {n['message']}", key=f"nbtn_{n['_id']}", use_container_width=True):
-                        if n.get("type") in ["share", "share_reaction"]: st.query_params["preview_notif"] = str(n['_id'])
-                        else: notifications_col.update_one({"_id": n['_id']}, {"$set": {"is_read": True}})
+                    label = f"{status} [{t_ago}] {html.escape(n['sender'])} {n['message']}"
+                    if st.button(label, key=f"nbtn_{n['_id']}", use_container_width=True):
+                        notifications_col.update_one({"_id": n['_id']}, {"$set": {"is_read": True}})
+                        if n.get("type") in ["share", "share_reaction"]: 
+                            st.query_params["preview_notif"] = str(n['_id'])
                         del st.query_params["profile_hub"]; st.rerun()
                 with col_del:
                     if st.button("❌", key=f"deln_{n['_id']}", help="Delete notification"):
@@ -689,62 +717,56 @@ def render_profile_hub_fullscreen():
                     users_col.update_one({"username": sib["username"]}, {"$set": {"session_token": token}})
                     st.session_state.username = sib["username"]
                     st.query_params["session"] = token
-                    del st.query_params["profile_hub"]; st.rerun()
+                    st.query_params.pop("profile_hub", None); st.rerun()
                     
         if len(siblings) < 5:
             st.info("You can create up to 5 completely separate vaults using this exact same email address. Just completely log out, go back to the Sign Up page, enter this email, and provide your phone number for validation.")
 
 @st.dialog("✨ Vault Assistant")
 def render_ai_chat_dialog():
-    st.markdown("""<style>
-        div[data-testid="stDialog"] > div[role="dialog"] { width: 100vw !important; max-width: 100vw !important; height: 100vh !important; max-height: 100vh !important; margin: 0 !important; border-radius: 0 !important; background: var(--bg-app) !important; padding: 20px 0 !important; }
-        div[data-testid="stDialog"] button[aria-label="Close"] { top: 20px; right: 20px; transform: scale(1.5); }
-    </style>""", unsafe_allow_html=True)
+    st.markdown("<p class='muted-text'>Ask me directly about your storage, files, or account.</p>", unsafe_allow_html=True)
     
-    _, center_col, _ = st.columns([1, 2.5, 1])
-    with center_col:
-        st.markdown('<div class="dashboard-title" style="margin-bottom: 5px;">Vault AI</div>', unsafe_allow_html=True)
-        st.markdown("<p class='muted-text'>Ask me directly about your storage, files, or account.</p>", unsafe_allow_html=True)
+    if "ai_messages" not in st.session_state:
+        st.session_state.ai_messages = [{"role": "assistant", "content": "Hello! I can provide exact counts of your photos and albums, or factual information about your vault."}]
+    
+    chat_container = st.container(height=350)
+    with chat_container:
+        for msg in st.session_state.ai_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+    
+    if prompt := st.chat_input("Ask a question about your vault..."):
+        st.session_state.ai_messages.append({"role": "user", "content": prompt})
         
-        if "ai_messages" not in st.session_state:
-            st.session_state.ai_messages = [{"role": "assistant", "content": "Hello! I can provide exact counts of your photos and albums, or factual information about your vault."}]
+        total_files = files_col.count_documents({"username": st.session_state.username})
+        total_images = files_col.count_documents({"username": st.session_state.username, "resource_type": "image"})
+        total_videos = files_col.count_documents({"username": st.session_state.username, "resource_type": "video"})
+        total_folders = folders_col.count_documents({"username": st.session_state.username, "folder_name": {"$ne": "root"}})
+        user_doc = users_col.find_one({"username": st.session_state.username})
         
-        chat_container = st.container(height=500)
-        with chat_container:
-            for msg in st.session_state.ai_messages:
-                with st.chat_message(msg["role"]): st.markdown(msg["content"])
-        
-        if prompt := st.chat_input("Ask a question about your vault..."):
-            st.session_state.ai_messages.append({"role": "user", "content": prompt})
+        lower_p = prompt.lower()
+        if any(w in lower_p for w in ["how many", "count", "number of", "total"]):
+            if any(w in lower_p for w in ["photo", "image", "pic"]): reply = f"You have {total_images} photos."
+            elif any(w in lower_p for w in ["video", "vid"]): reply = f"You have {total_videos} videos."
+            elif any(w in lower_p for w in ["folder", "album"]): reply = f"You have {total_folders} albums."
+            else: reply = f"You have {total_files} items in total."
+        elif "latest" in lower_p or "recent" in lower_p:
+             recent_file = files_col.find_one({"username": st.session_state.username}, sort=[("_id", -1)])
+             reply = f"Your most recent file was uploaded on {recent_file['_id'].generation_time.strftime('%b %d, %Y')}." if recent_file else "You haven't uploaded anything yet."
+        elif "pin" in lower_p or "location" in lower_p:
+            reply = f"Your vault PIN is {user_doc.get('pin_code')}."
+        else:
+            reply = f"I am your Vault AI. Ask factual questions like 'how many photos do I have?' or 'what is my PIN?'."
             
-            total_files = files_col.count_documents({"username": st.session_state.username})
-            total_images = files_col.count_documents({"username": st.session_state.username, "resource_type": "image"})
-            total_videos = files_col.count_documents({"username": st.session_state.username, "resource_type": "video"})
-            total_folders = folders_col.count_documents({"username": st.session_state.username, "folder_name": {"$ne": "root"}})
-            user_doc = users_col.find_one({"username": st.session_state.username})
-            
-            lower_p = prompt.lower()
-            if any(w in lower_p for w in ["how many", "count", "number of", "total"]):
-                if any(w in lower_p for w in ["photo", "image", "pic"]): reply = f"You have {total_images} photos."
-                elif any(w in lower_p for w in ["video", "vid"]): reply = f"You have {total_videos} videos."
-                elif any(w in lower_p for w in ["folder", "album"]): reply = f"You have {total_folders} albums."
-                else: reply = f"You have {total_files} items in total."
-            elif "latest" in lower_p or "recent" in lower_p:
-                 recent_file = files_col.find_one({"username": st.session_state.username}, sort=[("_id", -1)])
-                 reply = f"Your most recent file was uploaded on {recent_file['_id'].generation_time.strftime('%b %d, %Y')}." if recent_file else "You haven't uploaded anything yet."
-            elif "pin" in lower_p or "location" in lower_p:
-                reply = f"Your vault PIN is {user_doc.get('pin_code')}."
-            else:
-                reply = f"I am your Vault AI. You can ask me factual questions like 'how many photos do I have?' or 'what is my PIN?'."
-                
-            st.session_state.ai_messages.append({"role": "assistant", "content": reply})
-            st.rerun()
+        st.session_state.ai_messages.append({"role": "assistant", "content": reply})
+        st.rerun()
 
 # --- FULL-SCREEN LIGHTBOX & STORY RENDERERS ---
 def render_lightbox_fullscreen(idx, folder_id_str):
     f_id = None if folder_id_str == "root" else ObjectId(folder_id_str)
     files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": f_id}))
-    pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0))
+    
+    pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0), reverse=True)
     unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
     files = pinned_files + unpinned_files
     
@@ -765,10 +787,10 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     safe_url = html.escape(file['url'])
 
     media_element = f"<img src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
+    
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # Clean 3-Dot Menu 
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -783,7 +805,6 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     </div>
     '''
 
-    # Reaction Menu (Enforce 24h Lock)
     time_elapsed = time.time() - file.get("tag_time", 0)
     is_locked = bool(file.get("tag")) and (time_elapsed < 86400)
     
@@ -799,38 +820,9 @@ def render_lightbox_fullscreen(idx, folder_id_str):
         
     current_react = f"<div style='position:absolute; top:25px; left:25px; font-size: 32px; z-index:10000000;'>{html.escape(file.get('tag', ''))}</div>" if file.get("tag") else ""
 
-    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>{current_react}{action_html}{react_html}{prev_button}{next_button}{media_element}</div>"""
+    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>{current_react}{action_html}{react_html} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
 
-    # Safely attached swipe listener using parent document
-    components.html(f"""
-    <script>
-        window.parent.fullscreenSwipeNext = "{next_search}"; window.parent.fullscreenSwipePrev = "{prev_search}";
-        window.parent.hasFullscreenNext = {has_next}; window.parent.hasFullscreenPrev = {has_prev};
-        
-        if (window.parent.handleTouchStart) {{
-            window.parent.document.removeEventListener('touchstart', window.parent.handleTouchStart);
-            window.parent.document.removeEventListener('touchend', window.parent.handleTouchEnd);
-        }}
-        
-        window.parent.handleTouchStart = function(e) {{
-            window.parent.touchstartX = e.changedTouches[0].screenX;
-        }};
-        
-        window.parent.handleTouchEnd = function(e) {{
-            window.parent.touchendX = e.changedTouches[0].screenX;
-            let diff = window.parent.touchstartX - window.parent.touchendX;
-            if (diff > 50 && window.parent.hasFullscreenNext) {{
-                window.parent.location.href = window.parent.location.pathname + window.parent.fullscreenSwipeNext;
-            }} else if (diff < -50 && window.parent.hasFullscreenPrev) {{
-                window.parent.location.href = window.parent.location.pathname + window.parent.fullscreenSwipePrev;
-            }}
-        }};
-        
-        window.parent.document.addEventListener('touchstart', window.parent.handleTouchStart, {{passive: true}});
-        window.parent.document.addEventListener('touchend', window.parent.handleTouchEnd, {{passive: true}});
-    </script>
-    """, height=0)
     st.stop()
 
 def render_story_fullscreen(group_idx, story_idx):
@@ -859,14 +851,14 @@ def render_story_fullscreen(group_idx, story_idx):
     safe_url = html.escape(item["url"])
 
     media_element = f"<img src='{safe_url}' style='max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none;'>" if item['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 100%; max-height: 100%; object-fit: contain;'></video>"
+    
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # Reaction Hover Menu
+    # Clean 3-Dot Hover Menu for Story Reactions
     emojis = ["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]
     react_html = '<div class="story-menu"><div class="story-menu-btn">⋮</div><div class="story-menu-content">'
     for em in emojis:
-        # Pass exact file ID to guarantee reaction registers correctly
         r_link = get_nav_link(page="app", folder="root", story_group=group_idx, story_idx=story_idx, react=em, file_id=str(item["_id"]))
         react_html += f'<a href="{r_link}" target="_self" class="story-react-btn">{em}</a>'
     react_html += '</div></div>'
@@ -881,47 +873,20 @@ def render_story_fullscreen(group_idx, story_idx):
             .story-menu-content {{ display: none; position: absolute; top: 60px; left: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(20px); padding: 15px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.2); width: 220px; flex-wrap: wrap; gap: 12px; }} 
             .story-menu:hover .story-menu-content, .story-menu-content:hover {{ display: flex; flex-direction: row; }} 
             .story-menu::after {{ content: ''; position: absolute; top: 100%; left: 0; width: 100%; height: 20px; }}
-            .story-react-btn {{ font-size: 28px; text-decoration: none; transition: transform 0.2s ease; cursor: pointer; line-height: 1; }} 
+            .story-react-btn {{ font-size: 28px; text-decoration: none; transition: transform 0.2s ease; cursor: pointer; line-height: 1; display:inline-block; }} 
             .story-react-btn:hover {{ transform: scale(1.3); }}
         </style>
         <a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>
         {react_html}
         <div style="position: absolute; top: 30px; color: white; font-family: sans-serif; font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); z-index: 10000000; margin-left: 80px;">{html.escape(group['label'])}</div>
+        <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a>
+        <a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a>
         {prev_button}{next_button}
         <div style="position: absolute; bottom: 30px; color: white; font-family: sans-serif; font-size: 15px; font-weight: 600; background: rgba(255,255,255,0.15); padding: 8px 24px; border-radius: 30px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); letter-spacing: 1px; z-index: 10000000;">{story_idx + 1} / {len(items)}</div>
         {media_element}
     </div>
     """
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
-
-    components.html(f"""
-    <script>
-        window.parent.fullscreenSwipeNext = "{next_search}"; window.parent.fullscreenSwipePrev = "{prev_search}";
-        window.parent.hasFullscreenNext = {has_next}; window.parent.hasFullscreenPrev = {has_prev};
-        
-        if (window.parent.handleTouchStart) {{
-            window.parent.document.removeEventListener('touchstart', window.parent.handleTouchStart);
-            window.parent.document.removeEventListener('touchend', window.parent.handleTouchEnd);
-        }}
-        
-        window.parent.handleTouchStart = function(e) {{
-            window.parent.touchstartX = e.changedTouches[0].screenX;
-        }};
-        
-        window.parent.handleTouchEnd = function(e) {{
-            window.parent.touchendX = e.changedTouches[0].screenX;
-            let diff = window.parent.touchstartX - window.parent.touchendX;
-            if (diff > 50 && window.parent.hasFullscreenNext) {{
-                window.parent.location.href = window.parent.location.pathname + window.parent.fullscreenSwipeNext;
-            }} else if (diff < -50 && window.parent.hasFullscreenPrev) {{
-                window.parent.location.href = window.parent.location.pathname + window.parent.fullscreenSwipePrev;
-            }}
-        }};
-        
-        window.parent.document.addEventListener('touchstart', window.parent.handleTouchStart, {{passive: true}});
-        window.parent.document.addEventListener('touchend', window.parent.handleTouchEnd, {{passive: true}});
-    </script>
-    """, height=0)
     st.stop()
 
 
@@ -976,26 +941,62 @@ if not st.session_state.logged_in:
         st.markdown('<div class="auth-container">', unsafe_allow_html=True)
         if auth_view == "login":
             st.markdown('<div class="title-text">Welcome Back</div><div class="sub-text">Please enter your credentials to log in</div>', unsafe_allow_html=True)
-            email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="l_email")
-            pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="l_pwd")
-            forgot_html = f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_self" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>'
-            st.markdown(forgot_html.replace('\n', ''), unsafe_allow_html=True)
             
-            if st.button("Sign In", type="primary", use_container_width=True):
-                if not email or not pwd: st.error("Please enter email and password.")
-                else:
-                    result = login(email, pwd)
-                    if result:
+            if st.session_state.login_step == 0:
+                email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="l_email")
+                pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="l_pwd")
+                is_human = st.checkbox("☑️ I am human (Not a robot)", key="l_human")
+                
+                forgot_html = f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_self" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>'
+                st.markdown(forgot_html.replace('\n', ''), unsafe_allow_html=True)
+                
+                if st.button("Request OTP to Login", type="primary", use_container_width=True):
+                    if not is_human:
+                        st.error("Please confirm you are human to proceed.")
+                    elif not email or not pwd:
+                        st.error("Please enter email and password.")
+                    else:
+                        user = users_col.find_one({"email": email.strip().lower(), "password": hash_password(pwd)})
+                        if user:
+                            with st.spinner("Sending secure OTP to your email..."):
+                                otp = str(secrets.randbelow(900000) + 100000)
+                                users_col.update_one({"_id": user["_id"]}, {"$set": {"login_otp": otp}})
+                                if send_otp_email(email.strip().lower(), otp):
+                                    st.session_state.login_email = email.strip().lower()
+                                    st.session_state.login_step = 1
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to send email. Ensure SMTP is configured.")
+                        else:
+                            st.error("Invalid credentials.")
+                            
+                signup_html = f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_self" class="native-link">Sign Up</a></div>'
+                st.markdown(signup_html.replace('\n', ''), unsafe_allow_html=True)
+                
+            elif st.session_state.login_step == 1:
+                st.success(f"OTP sent to {html.escape(st.session_state.login_email)}")
+                otp_input = st.text_input("Enter 6-Digit OTP", placeholder="123456", label_visibility="collapsed", key="l_otp")
+                
+                c1, c2 = st.columns(2)
+                if c1.button("Verify & Login", type="primary", use_container_width=True):
+                    user = users_col.find_one({"email": st.session_state.login_email, "login_otp": otp_input.strip()})
+                    if user:
+                        users_col.update_one({"_id": user["_id"]}, {"$unset": {"login_otp": ""}})
                         token = str(uuid.uuid4())
-                        users_col.update_one({"username": result}, {"$set": {"session_token": token}})
-                        st.session_state.logged_in = True; st.session_state.username = result
-                        st.query_params["session"] = token; st.query_params["page"] = "app"; st.query_params["folder"] = "root"
+                        users_col.update_one({"_id": user["_id"]}, {"$set": {"session_token": token}})
+                        st.session_state.logged_in = True
+                        st.session_state.username = user["username"]
+                        st.session_state.login_step = 0
+                        st.query_params["session"] = token
+                        st.query_params["page"] = "app"
+                        st.query_params["folder"] = "root"
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
-                    else: st.error("Invalid credentials")
-                    
-            signup_html = f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_self" class="native-link">Sign Up</a></div>'
-            st.markdown(signup_html.replace('\n', ''), unsafe_allow_html=True)
+                    else:
+                        st.error("Invalid or expired OTP.")
+                if c2.button("Cancel", use_container_width=True):
+                    st.session_state.login_step = 0
+                    st.rerun()
 
         elif auth_view == "signup":
             st.markdown('<div class="title-text">Sign Up</div><div class="sub-text">Create an account to build your vault.</div>', unsafe_allow_html=True)
@@ -1006,9 +1007,13 @@ if not st.session_state.logged_in:
             s_email = st.text_input("Email", placeholder="you@example.com", label_visibility="collapsed", key="s_email")
             s_phone = st.text_input("Phone Number", placeholder="Phone Number (Required for multiple profiles)", label_visibility="collapsed", key="s_phone")
             s_pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="s_pwd")
+            s_agree = st.checkbox("☑️ I agree to the Privacy Policy and Terms of Service", key="s_agree")
             
             if st.button("Sign Up", type="primary", use_container_width=True):
-                if not s_email or not s_pwd or not fname or not pin_code: st.error("Please fill all core required fields.")
+                if not s_agree:
+                    st.error("You must agree to the Privacy Policy to create a vault.")
+                elif not s_email or not s_pwd or not fname or not pin_code: 
+                    st.error("Please fill all core required fields.")
                 else:
                     result = register(s_email, s_pwd, fname, lname, bday, pin_code, s_phone)
                     if result == "MAX_ACCOUNTS": st.error("Maximum of 5 profiles allowed per email address.")
@@ -1064,13 +1069,14 @@ else:
     inject_global_css()
     st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container { max-width: 100% !important; padding-top: 1rem !important; }</style>", unsafe_allow_html=True)
 
-    # Invisible 5-Minute Auto-Refresh embedded at top
-    components.html('<script>setTimeout(function(){ window.parent.location.reload(); }, 300000);</script>', height=0)
+    # 2 Min Background Auto-Refresh
+    components.html('<meta http-equiv="refresh" content="120">', height=0)
 
     # Intercept Full-Screen Dialogs
     if "share_folder" in st.query_params: share_media_dialog(st.query_params["share_folder"], mode="folder")
     if "ai_chat" in st.query_params: render_ai_chat_dialog()
     if "profile_hub" in st.query_params: render_profile_hub_fullscreen()
+    if "preview_notif" in st.query_params: preview_shared_dialog(st.query_params["preview_notif"])
     if "story_group" in st.query_params and "story_idx" in st.query_params: 
         render_story_fullscreen(int(st.query_params["story_group"]), int(st.query_params["story_idx"]))
     if "lightbox_idx" in st.query_params: 
@@ -1104,7 +1110,7 @@ else:
     current = folders_col.find_one({"_id": actual_folder_id})
     is_root = current is None or current.get("parent_id") is None
 
-    # --- TOP NAV WITH NO TEXT LINKS ---
+    # --- PERFECT TOP NAV ---
     prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
     display_name = html.escape(user_data.get("first_name", st.session_state.username))
     
@@ -1115,7 +1121,6 @@ else:
     unread_notifs = list(notifications_col.find({"username": st.session_state.username, "is_read": False}).sort("created_at", -1))
     notif_dot_html = '<div class="profile-notif-dot"></div>' if unread_notifs else ''
 
-    # Profile Widget hidden inside folders for clean view. Logo acts as Home.
     prof_widget = f'<a href="{prof_link}" target="_self" class="profile-header-widget"><img src="{html.escape(prof_pic)}"><span>{display_name}</span>{notif_dot_html}</a>' if is_root else ""
 
     header_html = f'''
@@ -1165,17 +1170,16 @@ else:
     with main_col:
         folders = list(folders_col.find({"username": st.session_state.username, "parent_id": actual_folder_id}))
         files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
-        pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0))
+        pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0), reverse=True)
         unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
         files = pinned_files + unpinned_files
 
         c_title, c_actions = st.columns([10, 2])
         
-        # Clean folder header (No redundant Back text)
         if is_root:
             c_title.markdown(f'<h2 style="margin:0;">{title_text}</h2>', unsafe_allow_html=True)
         else:
-            c_title.markdown(f'<div style="display:flex; align-items:center; gap: 15px;"><a href="{home_link}" target="_self" style="text-decoration:none; font-weight: 600; color: var(--accent); font-size: 20px;">←</a><h2 style="margin:0;">{title_text}</h2></div>', unsafe_allow_html=True)
+            c_title.markdown(f'<h2 style="margin:0;">{title_text}</h2>', unsafe_allow_html=True)
         
         with c_actions:
             if is_root:
@@ -1240,7 +1244,7 @@ else:
                         html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
-        # Pure Grid (No Checkboxes or 3-Dots. Action buttons exist ONLY in Lightbox)
+        # Pure Circular Grid (No Checkboxes or 3-Dots. Action buttons exist ONLY in Lightbox)
         if files:
             st.write("<br>", unsafe_allow_html=True)
             img_cols = st.columns(4)
@@ -1249,20 +1253,20 @@ else:
                     st.markdown('<div class="media-container-wrapper">', unsafe_allow_html=True)
                     
                     safe_tag = html.escape(file.get("tag", ""))
-                    emoji_badge = f'<div style="position:absolute; top:8px; left:8px; font-size:20px; z-index:10; background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(5px); padding: 4px 8px; border-radius: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: none;">{safe_tag}</div>' if safe_tag else ""
-                    pin_badge = '<div style="position:absolute; top:8px; right:8px; font-size:18px; z-index:10; text-shadow: 0 2px 4px rgba(0,0,0,0.5); pointer-events: none;">📌</div>' if file.get("pin_order", 0) > 0 else ""
+                    emoji_badge = f'<div style="position:absolute; top:5px; left:5px; font-size:18px; z-index:10; background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(5px); padding: 2px 6px; border-radius: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: none;">{safe_tag}</div>' if safe_tag else ""
+                    pin_badge = '<div style="position:absolute; top:5px; right:5px; font-size:16px; z-index:10; text-shadow: 0 2px 4px rgba(0,0,0,0.5); pointer-events: none;">📌</div>' if file.get("pin_order", 0) > 0 else ""
                     
                     session_token = html.escape(st.query_params.get('session', ''))
                     safe_folder_id = html.escape(str(actual_folder_id) if actual_folder_id else 'root')
                     lb_url = f"?page=app&folder={safe_folder_id}&lightbox_idx={i}&session={session_token}"
                     safe_url = html.escape(file["url"])
                     
-                    # Entire thumbnail acts as a button. Videos autoplay looped, shielded by a click-plate.
+                    # Target Self for Mobile Safety. Transparent layer to catch clicks on video
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
                         media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
                     else:
-                        media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
+                        media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
                     media_html += '</a>'
                     
                     st.markdown(media_html.replace('\n', ''), unsafe_allow_html=True)
