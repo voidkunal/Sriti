@@ -74,31 +74,37 @@ cloudinary.config(
 # ==========================================
 api_req_key = st.query_params.get("api_key")
 if api_req_key:
-    st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;} .stApp {background: #0e1117;}</style>", unsafe_allow_html=True)
+    # Make the background transparent for clean iframe embedding
+    st.markdown("""
+    <style>
+        #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;} 
+        .stApp {background: transparent !important;}
+        div[data-testid="stAppViewBlockContainer"] { padding: 0 !important; max-width: 100% !important; margin: 0 !important;}
+    </style>
+    """, unsafe_allow_html=True)
     
     target_folder = folders_col.find_one({"api_key": api_req_key, "api_enabled": True})
     
     if target_folder:
         files_data = list(files_col.find(
             {"folder_id": target_folder["_id"]}, 
-            {"_id": 0, "filename": 1, "url": 1, "resource_type": 1, "tag": 1, "created_at": 1}
+            {"_id": 0, "filename": 1, "url": 1, "resource_type": 1}
         ))
-        response = {
-            "status": "success",
-            "album_name": target_folder["folder_name"],
-            "owner": target_folder["username"],
-            "media_count": len(files_data),
-            "data": files_data
-        }
-    else:
-        response = {
-            "status": "error", 
-            "message": "Access Denied. Invalid or disabled API Key."
-        }
         
-    # INJECT PURE JSON INTO A HIDDEN DIV FOR THE FRONTEND JS TO SCRAPE
-    st.markdown(f"<div id='voidememo-api-data' style='display: none;'>{json.dumps(response)}</div>", unsafe_allow_html=True)
-    st.success("✅ API Endpoint Active. Data is ready for extraction.")
+        # Render a clean HTML gallery directly for the iframe to display
+        gallery_html = '<div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; padding: 20px;">'
+        for item in files_data:
+            safe_url = html.escape(item["url"])
+            if item["resource_type"] == "image":
+                gallery_html += f'<img src="{safe_url}" style="width:200px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); transition: transform 0.3s ease;" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'scale(1)\'">'
+            else:
+                gallery_html += f'<video src="{safe_url}" controls style="width:200px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); transition: transform 0.3s ease;" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'scale(1)\'"></video>'
+        gallery_html += '</div>'
+        
+        st.markdown(gallery_html, unsafe_allow_html=True)
+    else:
+        st.error("Access Denied. Invalid or disabled API Key.")
+        
     st.stop()
 
 
@@ -334,7 +340,7 @@ def developer_api_dialog(folder_id_str):
     folder = folders_col.find_one({"_id": fid})
     
     st.markdown("### Read-Only API Integration")
-    st.write("Generate a REST endpoint to safely embed this album's media on your external website, portfolio, or app. (Uploads remain secured on voidememo).")
+    st.write("Generate an endpoint to safely embed this album's media on your external website, portfolio, or app.")
     
     has_api = folder.get("api_enabled", False)
     api_key = folder.get("api_key", "")
@@ -347,10 +353,11 @@ def developer_api_dialog(folder_id_str):
     else:
         st.success("✅ API is Currently Active" if has_api else "⏸️ API is Currently Paused")
         
-        # Current base URL fallback
-        endpoint_url = f"https://YOUR_DOMAIN.com/?api_key={api_key}" 
+        # Determine the base URL dynamically or fallback
+        # Note: Replace YOUR_DOMAIN.com with your actual streamlit app URL if known, e.g., https://voidmemo.streamlit.app/
+        endpoint_url = f"https://voidmemo.streamlit.app/?api_key={api_key}" 
         
-        st.text_input("Your Secret API Endpoint URL:", value=endpoint_url, disabled=True)
+        st.text_input("Your Secret Embed URL:", value=endpoint_url, disabled=True)
         
         toggle_text = "Pause API Access" if has_api else "Resume API Access"
         if st.button(toggle_text, use_container_width=True):
@@ -359,82 +366,30 @@ def developer_api_dialog(folder_id_str):
             
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("#### Quick Integration Snippets")
-        t1, t2, t3 = st.tabs(["HTML / JS", "React (MERN)", "Python"])
+        t1, t2 = st.tabs(["HTML Iframe (Recommended)", "React (MERN)"])
         
         with t1:
-            st.code(f"""<div id="voidememo-gallery"></div>
-
-<script>
-fetch('{endpoint_url}')
-  .then(response => response.text())
-  .then(htmlText => {{
-     const parser = new DOMParser();
-     const doc = parser.parseFromString(htmlText, 'text/html');
-     const data = JSON.parse(doc.getElementById('voidememo-api-data').innerText);
-     const gallery = document.getElementById('voidememo-gallery');
-     
-     data.data.forEach(item => {{
-        const el = item.resource_type === 'image' 
-            ? `<img src="${{item.url}}" style="width:200px;">` 
-            : `<video src="${{item.url}}" controls style="width:200px;"></video>`;
-        gallery.innerHTML += el;
-     }});
-  }})
-  .catch(error => console.error('API Error:', error));
-</script>""", language="html")
+            st.code(f"""<iframe 
+    src="{endpoint_url}" 
+    width="100%" 
+    height="600px" 
+    style="border:none; border-radius: 12px; overflow: hidden;">
+</iframe>""", language="html")
 
         with t2:
-            st.code(f"""// React / Next.js Implementation
-import {{ useEffect, useState }} from 'react';
-
+            st.code(f"""// React / Next.js Implementation using an iframe
 export default function AlbumGallery() {{
-  const [media, setMedia] = useState([]);
-
-  useEffect(() => {{
-    fetch('{endpoint_url}')
-      .then(res => res.text())
-      .then(htmlText => {{
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(htmlText, 'text/html');
-          const json = JSON.parse(doc.getElementById('voidememo-api-data').innerText);
-          if(json.status === 'success') setMedia(json.data);
-      }});
-  }}, []);
-
   return (
-    <div className="grid gap-4 grid-cols-3">
-      {{media.map((item, i) => (
-        item.resource_type === 'image' 
-          ? <img key={{i}} src={{item.url}} alt={{item.filename}} className="rounded-lg"/>
-          : <video key={{i}} src={{item.url}} controls className="rounded-lg" />
-      ))}}
+    <div className="w-full h-[600px] rounded-xl overflow-hidden">
+        <iframe 
+            src="{endpoint_url}" 
+            width="100%" 
+            height="100%" 
+            style={{ border: 'none' }}
+        />
     </div>
   );
 }}""", language="javascript")
-
-        with t3:
-            st.code(f"""# Python (Django / Flask / Streamlit) Implementation
-import requests
-from bs4 import BeautifulSoup
-import json
-
-API_URL = "{endpoint_url}"
-
-def get_album_media():
-    response = requests.get(API_URL)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        data_div = soup.find(id="voidememo-api-data")
-        if data_div:
-            json_data = json.loads(data_div.string)
-            if json_data.get("status") == "success":
-                return json_data["data"]
-    return []
-
-# Example Usage
-for media in get_album_media():
-    print(f"File: {{media['filename']}} | Link: {{media['url']}}")
-""", language="python")
 
         st.warning("⚠️ Keep your API URL private. Anyone with this endpoint can view the media inside this specific album.")
 
