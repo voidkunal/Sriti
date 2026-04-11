@@ -70,11 +70,11 @@ cloudinary.config(
 )
 
 # ==========================================
-# 3. HEADLESS API ROUTER (SLIDER GALLERY)
+# 3. HEADLESS API ROUTER (DISCRETE SLIDER)
 # ==========================================
 api_req_key = st.query_params.get("api_key")
 if api_req_key:
-    # Make background transparent and build slider animation
+    # Make the background transparent and hide Streamlit UI
     st.markdown("""
     <style>
         #MainMenu {visibility: hidden !important;} 
@@ -82,40 +82,6 @@ if api_req_key:
         header {display: none !important;} 
         .stApp {background: transparent !important;}
         div[data-testid="stAppViewBlockContainer"] { padding: 0 !important; max-width: 100% !important; margin: 0 !important; background: transparent !important;}
-        
-        /* Auto-Sliding Carousel CSS */
-        .slider-container {
-            width: 100%;
-            overflow: hidden;
-            padding: 20px 0;
-            position: relative;
-        }
-        .slider-track {
-            display: flex;
-            gap: 30px;
-            width: max-content;
-            animation: slide 25s linear infinite;
-        }
-        .slider-track:hover {
-            animation-play-state: paused;
-        }
-        @keyframes slide {
-            0% { transform: translateX(0); }
-            /* Slides exactly half the width minus half the gap for a perfect loop */
-            100% { transform: translateX(calc(-50% - 15px)); } 
-        }
-        .slide-media {
-            height: 380px; /* Adjust height of sliding images here */
-            width: auto;
-            border-radius: 15px;
-            box-shadow: 0 10px 20px rgba(0,0,0,0.3);
-            transition: transform 0.3s ease;
-            object-fit: cover;
-        }
-        .slide-media:hover {
-            transform: scale(1.03);
-            cursor: pointer;
-        }
     </style>
     """, unsafe_allow_html=True)
     
@@ -128,19 +94,111 @@ if api_req_key:
         ))
         
         if len(files_data) > 0:
-            # Duplicate the data list to create a seamless infinite loop
-            loop_data = files_data * 4 
-            
-            gallery_html = '<div class="slider-container"><div class="slider-track">'
-            for item in loop_data:
+            media_html = ""
+            for item in files_data:
                 safe_url = html.escape(item["url"])
                 if item["resource_type"] == "image":
-                    gallery_html += f'<img src="{safe_url}" class="slide-media">'
+                    media_html += f'<img src="{safe_url}" class="slide-media">'
                 else:
-                    gallery_html += f'<video src="{safe_url}" controls class="slide-media"></video>'
-            gallery_html += '</div></div>'
+                    media_html += f'<video src="{safe_url}" controls class="slide-media"></video>'
+                    
+            # Use components.html to run Javascript cleanly isolated from Streamlit
+            carousel_html = f"""
+            <style>
+                body {{ margin: 0; padding: 0; background: transparent; overflow: hidden; font-family: sans-serif; }}
+                .carousel-wrapper {{
+                    position: relative;
+                    width: 100%;
+                    padding: 10px 40px;
+                    box-sizing: border-box;
+                }}
+                .carousel-track {{
+                    display: flex;
+                    gap: 20px;
+                    overflow-x: auto;
+                    scroll-snap-type: x mandatory;
+                    scroll-behavior: smooth;
+                    -ms-overflow-style: none; /* IE and Edge */
+                    scrollbar-width: none; /* Firefox */
+                }}
+                .carousel-track::-webkit-scrollbar {{
+                    display: none; /* Chrome */
+                }}
+                .slide-media {{
+                    flex: 0 0 auto;
+                    width: 250px;
+                    height: 380px;
+                    object-fit: cover;
+                    border-radius: 12px;
+                    scroll-snap-align: center;
+                    box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+                    transition: transform 0.3s ease;
+                }}
+                .slide-media:hover {{
+                    transform: scale(1.02);
+                }}
+                .slide-arrow {{
+                    position: absolute;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    background: rgba(255, 255, 255, 0.8);
+                    color: #333;
+                    border: none;
+                    font-size: 24px;
+                    font-weight: bold;
+                    cursor: pointer;
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 50%;
+                    z-index: 10;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                    transition: background 0.3s ease;
+                }}
+                .slide-arrow:hover {{ background: rgba(255, 255, 255, 1); }}
+                .left-arrow {{ left: 0px; }}
+                .right-arrow {{ right: 0px; }}
+            </style>
             
-            st.markdown(gallery_html, unsafe_allow_html=True)
+            <div class="carousel-wrapper" id="carouselWrapper">
+                <button class="slide-arrow left-arrow" onclick="slideLeft()">&#10094;</button>
+                <div class="carousel-track" id="carouselTrack">
+                    {media_html}
+                </div>
+                <button class="slide-arrow right-arrow" onclick="slideRight()">&#10095;</button>
+            </div>
+            
+            <script>
+                const track = document.getElementById("carouselTrack");
+                const scrollAmount = 270; // Item width (250) + gap (20)
+                
+                function slideLeft() {{ 
+                    track.scrollBy({{ left: -scrollAmount, behavior: 'smooth' }}); 
+                }}
+                
+                function slideRight() {{ 
+                    // Loop back to start if at the end
+                    if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{
+                        track.scrollTo({{ left: 0, behavior: 'smooth' }});
+                    }} else {{
+                        track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); 
+                    }}
+                }}
+                
+                // Auto-slide every 3.5 seconds
+                let autoSlide = setInterval(slideRight, 3500);
+                
+                // Pause when hovering over the carousel
+                const wrapper = document.getElementById('carouselWrapper');
+                wrapper.addEventListener('mouseenter', () => clearInterval(autoSlide));
+                wrapper.addEventListener('mouseleave', () => {{
+                    autoSlide = setInterval(slideRight, 3500);
+                }});
+            </script>
+            """
+            components.html(carousel_html, height=450)
         else:
             st.markdown('<p style="color: white; text-align: center;">Gallery is empty.</p>', unsafe_allow_html=True)
     else:
@@ -381,7 +439,7 @@ def developer_api_dialog(folder_id_str):
     folder = folders_col.find_one({"_id": fid})
     
     st.markdown("### Read-Only API Integration")
-    st.write("Generate an endpoint to safely embed this album's media on your external website, portfolio, or app.")
+    st.write("Generate a REST endpoint to safely embed this album's media on your external website, portfolio, or app. (Uploads remain secured on voidememo).")
     
     has_api = folder.get("api_enabled", False)
     api_key = folder.get("api_key", "")
@@ -394,11 +452,10 @@ def developer_api_dialog(folder_id_str):
     else:
         st.success("✅ API is Currently Active" if has_api else "⏸️ API is Currently Paused")
         
-        # Determine the base URL dynamically or fallback
-        # Note: Replace YOUR_DOMAIN.com with your actual streamlit app URL if known, e.g., https://voidmemo.streamlit.app/
-        endpoint_url = f"https://voidmemo.streamlit.app/?embed=true&api_key={api_key}" 
+        # Current base URL fallback
+        endpoint_url = f"https://YOUR_DOMAIN.com/?api_key={api_key}" 
         
-        st.text_input("Your Secret Embed URL:", value=endpoint_url, disabled=True)
+        st.text_input("Your Secret API Endpoint URL:", value=endpoint_url, disabled=True)
         
         toggle_text = "Pause API Access" if has_api else "Resume API Access"
         if st.button(toggle_text, use_container_width=True):
@@ -407,30 +464,82 @@ def developer_api_dialog(folder_id_str):
             
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("#### Quick Integration Snippets")
-        t1, t2 = st.tabs(["HTML Iframe (Recommended)", "React (MERN)"])
+        t1, t2, t3 = st.tabs(["HTML / JS", "React (MERN)", "Python"])
         
         with t1:
-            st.code(f"""<iframe 
-    src="{endpoint_url}" 
-    width="100%" 
-    height="450px" 
-    style="border:none; overflow: hidden;">
-</iframe>""", language="html")
+            st.code(f"""<div id="voidememo-gallery"></div>
+
+<script>
+fetch('{endpoint_url}')
+  .then(response => response.text())
+  .then(htmlText => {{
+     const parser = new DOMParser();
+     const doc = parser.parseFromString(htmlText, 'text/html');
+     const data = JSON.parse(doc.getElementById('voidememo-api-data').innerText);
+     const gallery = document.getElementById('voidememo-gallery');
+     
+     data.data.forEach(item => {{
+        const el = item.resource_type === 'image' 
+            ? `<img src="${{item.url}}" style="width:200px;">` 
+            : `<video src="${{item.url}}" controls style="width:200px;"></video>`;
+        gallery.innerHTML += el;
+     }});
+  }})
+  .catch(error => console.error('API Error:', error));
+</script>""", language="html")
 
         with t2:
-            st.code(f"""// React / Next.js Implementation using an iframe
+            st.code(f"""// React / Next.js Implementation
+import {{ useEffect, useState }} from 'react';
+
 export default function AlbumGallery() {{
+  const [media, setMedia] = useState([]);
+
+  useEffect(() => {{
+    fetch('{endpoint_url}')
+      .then(res => res.text())
+      .then(htmlText => {{
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(htmlText, 'text/html');
+          const json = JSON.parse(doc.getElementById('voidememo-api-data').innerText);
+          if(json.status === 'success') setMedia(json.data);
+      }});
+  }}, []);
+
   return (
-    <div className="w-full h-[450px] overflow-hidden">
-        <iframe 
-            src="{endpoint_url}" 
-            width="100%" 
-            height="100%" 
-            style={{ border: 'none' }}
-        />
+    <div className="grid gap-4 grid-cols-3">
+      {{media.map((item, i) => (
+        item.resource_type === 'image' 
+          ? <img key={{i}} src={{item.url}} alt={{item.filename}} className="rounded-lg"/>
+          : <video key={{i}} src={{item.url}} controls className="rounded-lg" />
+      ))}}
     </div>
   );
 }}""", language="javascript")
+
+        with t3:
+            st.code(f"""# Python (Django / Flask / Streamlit) Implementation
+import requests
+from bs4 import BeautifulSoup
+import json
+
+API_URL = "{endpoint_url}"
+
+def get_album_media():
+    response = requests.get(API_URL)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, 'html.parser')
+        data_div = soup.find(id="voidememo-api-data")
+        if data_div:
+            json_data = json.loads(data_div.string)
+            if json_data.get("status") == "success":
+                return json_data["data"]
+    return []
+
+# Example Usage
+for media in get_album_media():
+    print(f"File: {{media['filename']}} | Link: {{media['url']}}")
+""", language="python")
 
         st.warning("⚠️ Keep your API URL private. Anyone with this endpoint can view the media inside this specific album.")
 
