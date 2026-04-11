@@ -3,6 +3,7 @@ pymongo
 cloudinary
 certifi
 plotly
-tensorflow
+tensorflow-cpu
 Pillow
 numpy
+requests
