@@ -3,3 +3,6 @@ pymongo
 cloudinary
 certifi
 plotly
+tensorflow
+Pillow
+numpy

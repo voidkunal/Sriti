@@ -17,6 +17,13 @@ import datetime
 import html
 import secrets 
 import json
+import io
+import requests
+
+# ML Libraries for Data Protection Model
+import tensorflow as tf
+from PIL import Image
+import numpy as np
 
 # ==========================================
 # 1. UI CONFIGURATION & SETUP
@@ -48,6 +55,43 @@ st.markdown("""
     header[data-testid="stHeader"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
+
+# ==========================================
+# AI DATA PROTECTION MODEL CONFIGURATION
+# ==========================================
+@st.cache_resource(show_spinner=False)
+def load_nsfw_model():
+    try:
+        model = tf.keras.models.load_model('nsfw_model.h5')
+        return model
+    except Exception as e:
+        print(f"Failed to load AI protection model: {e}")
+        return None
+
+safety_model = load_nsfw_model()
+
+def is_safe_content(file_bytes, model):
+    if model is None:
+        return True # If model fails to load, allow upload to prevent breaking the app
+    
+    try:
+        # Preprocess the image for the model
+        img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
+        img = img.resize((224, 224)) # Standard target size
+        img_array = np.array(img) / 255.0 # Normalize 0-1
+        img_array = np.expand_dims(img_array, axis=0)
+        
+        # Run Inference
+        prediction = model.predict(img_array, verbose=0)
+        
+        # Determine score (handles both [safe, nsfw] and [nsfw] output structures)
+        score = prediction[0][1] if prediction.shape[1] > 1 else prediction[0][0]
+        
+        # Threshold: If score is > 0.6, it's flagged as NSFW (False = not safe)
+        return score <= 0.6 
+    except Exception as e:
+        print(f"Image processing error: {e}")
+        return True 
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -90,73 +134,36 @@ if api_req_key:
     if target_folder:
         files_data = list(files_col.find(
             {"folder_id": target_folder["_id"]}, 
-            {"_id": 0, "filename": 1, "url": 1, "resource_type": 1}
+            {"_id": 0, "filename": 1, "url": 1, "resource_type": 1, "is_flagged": 1}
         ))
         
         if len(files_data) > 0:
             media_html = ""
             for item in files_data:
                 safe_url = html.escape(item["url"])
+                is_flagged = item.get("is_flagged", False)
+                
                 if item["resource_type"] == "image":
-                    media_html += f'<img src="{safe_url}" class="slide-media">'
+                    if is_flagged:
+                        media_html += f'''
+                        <div style="position:relative; width:250px; height:380px; flex: 0 0 auto; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 16px rgba(0,0,0,0.3);">
+                            <img src="{safe_url}" class="slide-media" style="width:100%; height:100%; object-fit:cover; filter: blur(25px); transform: scale(1.1); cursor: pointer;" onclick="this.style.filter='none'; this.style.transform='scale(1)'" onmouseleave="this.style.filter='blur(25px)'; this.style.transform='scale(1.1)'">
+                            <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:50px; pointer-events:none;">🙈</div>
+                        </div>'''
+                    else:
+                        media_html += f'<img src="{safe_url}" class="slide-media" style="flex: 0 0 auto; width: 250px; height: 380px; object-fit: cover; border-radius: 12px; scroll-snap-align: center; box-shadow: 0 8px 16px rgba(0,0,0,0.3); transition: transform 0.3s ease;">'
                 else:
-                    media_html += f'<video src="{safe_url}" controls class="slide-media"></video>'
+                    media_html += f'<video src="{safe_url}" controls class="slide-media" style="flex: 0 0 auto; width: 250px; height: 380px; object-fit: cover; border-radius: 12px; scroll-snap-align: center; box-shadow: 0 8px 16px rgba(0,0,0,0.3); transition: transform 0.3s ease;"></video>'
                     
             # Use components.html to run Javascript cleanly isolated from Streamlit
             carousel_html = f"""
             <style>
                 body {{ margin: 0; padding: 0; background: transparent; overflow: hidden; font-family: sans-serif; }}
-                .carousel-wrapper {{
-                    position: relative;
-                    width: 100%;
-                    padding: 10px 40px;
-                    box-sizing: border-box;
-                }}
-                .carousel-track {{
-                    display: flex;
-                    gap: 20px;
-                    overflow-x: auto;
-                    scroll-snap-type: x mandatory;
-                    scroll-behavior: smooth;
-                    -ms-overflow-style: none; /* IE and Edge */
-                    scrollbar-width: none; /* Firefox */
-                }}
-                .carousel-track::-webkit-scrollbar {{
-                    display: none; /* Chrome */
-                }}
-                .slide-media {{
-                    flex: 0 0 auto;
-                    width: 250px;
-                    height: 380px;
-                    object-fit: cover;
-                    border-radius: 12px;
-                    scroll-snap-align: center;
-                    box-shadow: 0 8px 16px rgba(0,0,0,0.3);
-                    transition: transform 0.3s ease;
-                }}
-                .slide-media:hover {{
-                    transform: scale(1.02);
-                }}
-                .slide-arrow {{
-                    position: absolute;
-                    top: 50%;
-                    transform: translateY(-50%);
-                    background: rgba(255, 255, 255, 0.8);
-                    color: #333;
-                    border: none;
-                    font-size: 24px;
-                    font-weight: bold;
-                    cursor: pointer;
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 50%;
-                    z-index: 10;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-                    transition: background 0.3s ease;
-                }}
+                .carousel-wrapper {{ position: relative; width: 100%; padding: 10px 40px; box-sizing: border-box; }}
+                .carousel-track {{ display: flex; gap: 20px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; -ms-overflow-style: none; /* IE and Edge */ scrollbar-width: none; /* Firefox */ }}
+                .carousel-track::-webkit-scrollbar {{ display: none; /* Chrome */ }}
+                .slide-media:hover {{ transform: scale(1.02); }}
+                .slide-arrow {{ position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255, 255, 255, 0.8); color: #333; border: none; font-size: 24px; font-weight: bold; cursor: pointer; width: 40px; height: 40px; border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: background 0.3s ease; }}
                 .slide-arrow:hover {{ background: rgba(255, 255, 255, 1); }}
                 .left-arrow {{ left: 0px; }}
                 .right-arrow {{ right: 0px; }}
@@ -174,10 +181,7 @@ if api_req_key:
                 const track = document.getElementById("carouselTrack");
                 const scrollAmount = 270; // Item width (250) + gap (20)
                 
-                function slideLeft() {{ 
-                    track.scrollBy({{ left: -scrollAmount, behavior: 'smooth' }}); 
-                }}
-                
+                function slideLeft() {{ track.scrollBy({{ left: -scrollAmount, behavior: 'smooth' }}); }}
                 function slideRight() {{ 
                     // Loop back to start if at the end
                     if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{
@@ -193,9 +197,7 @@ if api_req_key:
                 // Pause when hovering over the carousel
                 const wrapper = document.getElementById('carouselWrapper');
                 wrapper.addEventListener('mouseenter', () => clearInterval(autoSlide));
-                wrapper.addEventListener('mouseleave', () => {{
-                    autoSlide = setInterval(slideRight, 3500);
-                }});
+                wrapper.addEventListener('mouseleave', () => {{ autoSlide = setInterval(slideRight, 3500); }});
             </script>
             """
             components.html(carousel_html, height=450)
@@ -354,7 +356,10 @@ if st.session_state.logged_in:
                         files_col.update_one({"_id": fid}, {"$unset": {"pin_order": ""}})
                     else:
                         max_pin = files_col.find_one({"folder_id": file["folder_id"], "pin_order": {"$exists": True}}, sort=[("pin_order", -1)])
-                        files_col.update_one({"_id": fid}, {"$set": {"pin_order": (max_pin.get("pin_order", 0) if max_pin else 0) + 1}})
+                        new_pin_val = 1
+                        if max_pin and "pin_order" in max_pin:
+                            new_pin_val = max_pin["pin_order"] + 1
+                        files_col.update_one({"_id": fid}, {"$set": {"pin_order": new_pin_val}})
                 elif action == "cover":
                     url = file["url"]
                     if file["resource_type"] == "video":
@@ -453,7 +458,7 @@ def developer_api_dialog(folder_id_str):
         st.success("✅ API is Currently Active" if has_api else "⏸️ API is Currently Paused")
         
         # Current base URL fallback
-        endpoint_url = f"https://YOUR_DOMAIN.com/?api_key={api_key}" 
+        endpoint_url = f"https://voidmemo.streamlit.app/?embed=true&api_key={api_key}" 
         
         st.text_input("Your Secret API Endpoint URL:", value=endpoint_url, disabled=True)
         
@@ -833,7 +838,23 @@ def render_profile_hub_overlay():
                 else:
                     users_col.update_one({"username": st.session_state.username}, {"$set": updates})
                     st.success("Profile Updated!"); time.sleep(1); st.rerun()
-        
+            
+            st.markdown("<hr>", unsafe_allow_html=True)
+            st.markdown("### Safety Controls")
+            st.write("Scan all existing media uploaded before the AI Protection Model was activated.")
+            if st.button("🔍 Scan Vault for Sensitive Content", use_container_width=True):
+                with st.spinner("Downloading and analyzing old media. This may take a moment..."):
+                    updated_count = 0
+                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}):
+                        try:
+                            resp = requests.get(f["url"], timeout=5)
+                            if resp.status_code == 200:
+                                safe = is_safe_content(resp.content, safety_model)
+                                files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
+                                updated_count += 1
+                        except Exception: pass
+                    st.success(f"Scan complete! Analyzed {updated_count} legacy files.")
+
         with c2:
             st.markdown("### Reaction Analytics")
             pipeline = [{"$match": {"username": st.session_state.username, "tag": {"$ne": ""}}}, {"$group": {"_id": "$tag", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 4}]
@@ -973,6 +994,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
 
     file = files[idx]
     fid = str(file["_id"])
+    is_flagged = file.get("is_flagged", False)
     has_next = "true" if idx < len(files) - 1 else "false"
     has_prev = "true" if idx > 0 else "false"
     
@@ -983,7 +1005,10 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     close_search = f"?page=app&folder={safe_folder_id}&session={session_token}"
     safe_url = html.escape(file['url'])
 
-    media_element = f"<img src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
+    blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
+    reveal_btn = f"<button onclick=\"document.getElementById('lb-media').style.filter='none'; document.getElementById('lb-media').style.transform='scale(1)'; this.style.display='none';\" style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px);'>👁️ Reveal Sensitive Content</button>" if is_flagged else ""
+
+    media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
@@ -1017,7 +1042,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
         
     current_react = f"<div style='position:absolute; top:25px; left:25px; font-size: 32px; z-index:10000000;'>{html.escape(file.get('tag', ''))}</div>" if file.get("tag") else ""
 
-    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>header {{display: none !important;}} .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; left: 25px;">✕</a>{current_react}{action_html}{react_html} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
+    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>header {{display: none !important;}} .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; left: 25px;">✕</a>{current_react}{action_html}{react_html} {reveal_btn} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
     st.stop()
 
@@ -1047,7 +1072,11 @@ def render_story_fullscreen(group_idx, story_idx):
     close_search = f"?page=app&folder=root&session={session_token}"
     safe_url = html.escape(item["url"])
 
-    media_element = f"<img src='{safe_url}' style='max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none;'>" if item['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 100%; max-height: 100%; object-fit: contain;'></video>"
+    is_flagged = item.get("is_flagged", False)
+    blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
+    reveal_btn = f"<button onclick=\"document.getElementById('st-media').style.filter='none'; document.getElementById('st-media').style.transform='scale(1)'; this.style.display='none';\" style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px);'>👁️ Reveal Sensitive Content</button>" if is_flagged else ""
+
+    media_element = f"<img id='st-media' src='{safe_url}' style='max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if item['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 100%; max-height: 100%; object-fit: contain;'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
@@ -1081,6 +1110,7 @@ def render_story_fullscreen(group_idx, story_idx):
         </style>
         <a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>
         {react_html}
+        {reveal_btn}
         <div style="position: absolute; top: 30px; color: white; font-family: sans-serif; font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); z-index: 10000000; margin-left: 80px;">{html.escape(group['label'])}</div>
         <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a>
         <a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a>
@@ -1402,9 +1432,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     inject_dashboard_css()
 
-    # 5 Min Background Auto-Refresh
-    components.html('<meta http-equiv="refresh" content="300">', height=0)
-
     # --- EXCLUSIVE DIALOG ROUTING (Mutex) ---
     dialog_rendered = False
 
@@ -1520,6 +1547,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     with main_col:
         folders = list(folders_col.find({"username": st.session_state.username, "parent_id": actual_folder_id}))
         files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
+        
+        # Sort files so pinned items appear first
         pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0), reverse=True)
         unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
         files = pinned_files + unpinned_files
@@ -1563,21 +1592,44 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                         folders_col.update_one({"_id": current["_id"]}, {"$set": {"is_locked": not is_locked}}); st.rerun()
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     st.markdown("**Add Content**")
+                    
+                    # ----------------------------------------------------
+                    # AI SAFEGUARD INJECTION
+                    # ----------------------------------------------------
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
+                        force_upload = st.checkbox("Allow upload even if flagged as sensitive (Applies Blur)")
                         submit_button = st.form_submit_button("Sync Files", type="primary", use_container_width=True)
                         if submit_button and uploaded_files:
                             allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm", "video/quicktime"]
-                            with st.spinner("Syncing to cloud..."):
+                            with st.spinner("Analyzing and Syncing to cloud..."):
                                 for file in uploaded_files:
                                     if file.type not in allowed_types: continue
                                     r_type = "video" if file.type.startswith("video") else "image"
+                                    
+                                    file_bytes = file.getvalue()
+                                    file.seek(0)
+                                    
+                                    is_flagged = False
+                                    # Run the AI data protection check on images
+                                    if r_type == "image":
+                                        if not is_safe_content(file_bytes, safety_model):
+                                            if force_upload:
+                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged. Forced upload enabled. Blurring.")
+                                                is_flagged = True
+                                            else:
+                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged by Safety AI.")
+                                                continue # Skip to the next file
+                                        
                                     try:
-                                        file.seek(0)
                                         res = cloudinary.uploader.upload_large(file, resource_type=r_type, chunk_size=20000000) if file.size > 50000000 else cloudinary.uploader.upload(file, resource_type=r_type)
-                                        files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "tag": "", "tag_time": 0})
-                                    except Exception as e: st.error(f"Failed to upload {html.escape(file.name)}.")
+                                        files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "is_flagged": is_flagged, "tag": "", "tag_time": 0})
+                                    except Exception as e: 
+                                        st.error(f"Failed to upload {html.escape(file.name)}.")
+                                        
                             st.session_state.uploader_key += 1; st.rerun()
+                    # ----------------------------------------------------
+                            
                 st.markdown('</div>', unsafe_allow_html=True)
         st.write("<br>", unsafe_allow_html=True)
 
@@ -1616,10 +1668,14 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     safe_folder_id = html.escape(str(actual_folder_id) if actual_folder_id else 'root')
                     lb_url = f"?page=app&folder={safe_folder_id}&lightbox_idx={i}&session={session_token}"
                     safe_url = html.escape(file["url"])
+                    is_flagged = file.get("is_flagged", False)
                     
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
-                        media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
+                        if is_flagged:
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20;">🙈</div></div>'
+                        else:
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
                     else:
                         media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
                     media_html += '</a>'
