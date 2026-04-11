@@ -70,16 +70,52 @@ cloudinary.config(
 )
 
 # ==========================================
-# 3. HEADLESS API ROUTER (READ-ONLY)
+# 3. HEADLESS API ROUTER (SLIDER GALLERY)
 # ==========================================
 api_req_key = st.query_params.get("api_key")
 if api_req_key:
-    # Make the background transparent for clean iframe embedding
+    # Make background transparent and build slider animation
     st.markdown("""
     <style>
-        #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;} 
+        #MainMenu {visibility: hidden !important;} 
+        footer {display: none !important; visibility: hidden !important;} 
+        header {display: none !important;} 
         .stApp {background: transparent !important;}
-        div[data-testid="stAppViewBlockContainer"] { padding: 0 !important; max-width: 100% !important; margin: 0 !important;}
+        div[data-testid="stAppViewBlockContainer"] { padding: 0 !important; max-width: 100% !important; margin: 0 !important; background: transparent !important;}
+        
+        /* Auto-Sliding Carousel CSS */
+        .slider-container {
+            width: 100%;
+            overflow: hidden;
+            padding: 20px 0;
+            position: relative;
+        }
+        .slider-track {
+            display: flex;
+            gap: 30px;
+            width: max-content;
+            animation: slide 25s linear infinite;
+        }
+        .slider-track:hover {
+            animation-play-state: paused;
+        }
+        @keyframes slide {
+            0% { transform: translateX(0); }
+            /* Slides exactly half the width minus half the gap for a perfect loop */
+            100% { transform: translateX(calc(-50% - 15px)); } 
+        }
+        .slide-media {
+            height: 380px; /* Adjust height of sliding images here */
+            width: auto;
+            border-radius: 15px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+            transition: transform 0.3s ease;
+            object-fit: cover;
+        }
+        .slide-media:hover {
+            transform: scale(1.03);
+            cursor: pointer;
+        }
     </style>
     """, unsafe_allow_html=True)
     
@@ -91,17 +127,22 @@ if api_req_key:
             {"_id": 0, "filename": 1, "url": 1, "resource_type": 1}
         ))
         
-        # Render a clean HTML gallery directly for the iframe to display
-        gallery_html = '<div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; padding: 20px;">'
-        for item in files_data:
-            safe_url = html.escape(item["url"])
-            if item["resource_type"] == "image":
-                gallery_html += f'<img src="{safe_url}" style="width:200px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); transition: transform 0.3s ease;" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'scale(1)\'">'
-            else:
-                gallery_html += f'<video src="{safe_url}" controls style="width:200px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); transition: transform 0.3s ease;" onmouseover="this.style.transform=\'scale(1.05)\'" onmouseout="this.style.transform=\'scale(1)\'"></video>'
-        gallery_html += '</div>'
-        
-        st.markdown(gallery_html, unsafe_allow_html=True)
+        if len(files_data) > 0:
+            # Duplicate the data list to create a seamless infinite loop
+            loop_data = files_data * 4 
+            
+            gallery_html = '<div class="slider-container"><div class="slider-track">'
+            for item in loop_data:
+                safe_url = html.escape(item["url"])
+                if item["resource_type"] == "image":
+                    gallery_html += f'<img src="{safe_url}" class="slide-media">'
+                else:
+                    gallery_html += f'<video src="{safe_url}" controls class="slide-media"></video>'
+            gallery_html += '</div></div>'
+            
+            st.markdown(gallery_html, unsafe_allow_html=True)
+        else:
+            st.markdown('<p style="color: white; text-align: center;">Gallery is empty.</p>', unsafe_allow_html=True)
     else:
         st.error("Access Denied. Invalid or disabled API Key.")
         
@@ -355,7 +396,7 @@ def developer_api_dialog(folder_id_str):
         
         # Determine the base URL dynamically or fallback
         # Note: Replace YOUR_DOMAIN.com with your actual streamlit app URL if known, e.g., https://voidmemo.streamlit.app/
-        endpoint_url = f"https://voidmemo.streamlit.app/?api_key={api_key}" 
+        endpoint_url = f"https://voidmemo.streamlit.app/?embed=true&api_key={api_key}" 
         
         st.text_input("Your Secret Embed URL:", value=endpoint_url, disabled=True)
         
@@ -372,15 +413,15 @@ def developer_api_dialog(folder_id_str):
             st.code(f"""<iframe 
     src="{endpoint_url}" 
     width="100%" 
-    height="600px" 
-    style="border:none; border-radius: 12px; overflow: hidden;">
+    height="450px" 
+    style="border:none; overflow: hidden;">
 </iframe>""", language="html")
 
         with t2:
             st.code(f"""// React / Next.js Implementation using an iframe
 export default function AlbumGallery() {{
   return (
-    <div className="w-full h-[600px] rounded-xl overflow-hidden">
+    <div className="w-full h-[450px] overflow-hidden">
         <iframe 
             src="{endpoint_url}" 
             width="100%" 
