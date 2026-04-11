@@ -16,6 +16,7 @@ import random
 import datetime
 import html
 import secrets 
+import json
 
 # ==========================================
 # 1. UI CONFIGURATION & SETUP
@@ -69,7 +70,40 @@ cloudinary.config(
 )
 
 # ==========================================
-# 3. UTILITIES & SECURITY FUNCTIONS
+# 3. HEADLESS API ROUTER (READ-ONLY)
+# ==========================================
+api_req_key = st.query_params.get("api_key")
+if api_req_key:
+    st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;} .stApp {background: #0e1117;}</style>", unsafe_allow_html=True)
+    
+    target_folder = folders_col.find_one({"api_key": api_req_key, "api_enabled": True})
+    
+    if target_folder:
+        files_data = list(files_col.find(
+            {"folder_id": target_folder["_id"]}, 
+            {"_id": 0, "filename": 1, "url": 1, "resource_type": 1, "tag": 1, "created_at": 1}
+        ))
+        response = {
+            "status": "success",
+            "album_name": target_folder["folder_name"],
+            "owner": target_folder["username"],
+            "media_count": len(files_data),
+            "data": files_data
+        }
+    else:
+        response = {
+            "status": "error", 
+            "message": "Access Denied. Invalid or disabled API Key."
+        }
+        
+    # INJECT PURE JSON INTO A HIDDEN DIV FOR THE FRONTEND JS TO SCRAPE
+    st.markdown(f"<div id='voidememo-api-data' style='display: none;'>{json.dumps(response)}</div>", unsafe_allow_html=True)
+    st.success("✅ API Endpoint Active. Data is ready for extraction.")
+    st.stop()
+
+
+# ==========================================
+# 4. UTILITIES & SECURITY FUNCTIONS
 # ==========================================
 def hash_password(password):
     pwd_str = str(password).strip()
@@ -108,7 +142,7 @@ def register(email, password, first_name, last_name, birthday, pin_code, phone_n
         "pin_code": safe_pin, "phone_number": safe_phone,
         "profile_photo": "", "bio": "", "session_token": "", "reset_otp": "", "reset_otp_exp": 0
     })
-    folders_col.insert_one({"username": safe_username, "folder_name": "root", "parent_id": None, "is_locked": False})
+    folders_col.insert_one({"username": safe_username, "folder_name": "root", "parent_id": None, "is_locked": False, "api_key": "", "api_enabled": False})
     return safe_username
 
 def login(email, password):
@@ -150,7 +184,7 @@ def send_otp_email(receiver_email, otp):
         return False
 
 # ==========================================
-# 4. NATIVE GESTURE ROUTING SYSTEM
+# 5. NATIVE GESTURE ROUTING SYSTEM
 # ==========================================
 def get_nav_link(page=None, view=None, tab=None, folder=None, story_group=None, story_idx=None, lightbox_idx=None, profile_hub=None, ai_chat=None, react=None, action=None, file_id=None):
     params = []
@@ -192,7 +226,7 @@ if not st.session_state.logged_in and "session" in st.query_params:
         st.session_state.username = user["username"]
 
 # ==========================================
-# 5. PRE-RENDER ACTION INTERCEPTORS
+# 6. PRE-RENDER ACTION INTERCEPTORS
 # ==========================================
 if st.session_state.logged_in:
     
@@ -249,7 +283,7 @@ if st.session_state.logged_in:
         st.rerun()
 
 # ==========================================
-# 6. TIME-SEEDED DETERMINISTIC ENGINE
+# 7. TIME-SEEDED DETERMINISTIC ENGINE
 # ==========================================
 if st.session_state.logged_in:
     time_window = int(time.time() / 300) 
@@ -294,6 +328,117 @@ if st.session_state.logged_in:
 # ==========================================
 # 8. DIALOG FUNCTIONS
 # ==========================================
+@st.dialog("⚡ Developer API Access")
+def developer_api_dialog(folder_id_str):
+    fid = ObjectId(folder_id_str)
+    folder = folders_col.find_one({"_id": fid})
+    
+    st.markdown("### Read-Only API Integration")
+    st.write("Generate a REST endpoint to safely embed this album's media on your external website, portfolio, or app. (Uploads remain secured on voidememo).")
+    
+    has_api = folder.get("api_enabled", False)
+    api_key = folder.get("api_key", "")
+    
+    if not api_key:
+        if st.button("Generate API Key", type="primary", use_container_width=True):
+            new_key = "vm_api_" + secrets.token_urlsafe(24)
+            folders_col.update_one({"_id": fid}, {"$set": {"api_key": new_key, "api_enabled": True}})
+            st.rerun()
+    else:
+        st.success("✅ API is Currently Active" if has_api else "⏸️ API is Currently Paused")
+        
+        # Current base URL fallback
+        endpoint_url = f"https://YOUR_DOMAIN.com/?api_key={api_key}" 
+        
+        st.text_input("Your Secret API Endpoint URL:", value=endpoint_url, disabled=True)
+        
+        toggle_text = "Pause API Access" if has_api else "Resume API Access"
+        if st.button(toggle_text, use_container_width=True):
+            folders_col.update_one({"_id": fid}, {"$set": {"api_enabled": not has_api}})
+            st.rerun()
+            
+        st.markdown("<hr>", unsafe_allow_html=True)
+        st.markdown("#### Quick Integration Snippets")
+        t1, t2, t3 = st.tabs(["HTML / JS", "React (MERN)", "Python"])
+        
+        with t1:
+            st.code(f"""<div id="voidememo-gallery"></div>
+
+<script>
+fetch('{endpoint_url}')
+  .then(response => response.text())
+  .then(htmlText => {{
+     const parser = new DOMParser();
+     const doc = parser.parseFromString(htmlText, 'text/html');
+     const data = JSON.parse(doc.getElementById('voidememo-api-data').innerText);
+     const gallery = document.getElementById('voidememo-gallery');
+     
+     data.data.forEach(item => {{
+        const el = item.resource_type === 'image' 
+            ? `<img src="${{item.url}}" style="width:200px;">` 
+            : `<video src="${{item.url}}" controls style="width:200px;"></video>`;
+        gallery.innerHTML += el;
+     }});
+  }})
+  .catch(error => console.error('API Error:', error));
+</script>""", language="html")
+
+        with t2:
+            st.code(f"""// React / Next.js Implementation
+import {{ useEffect, useState }} from 'react';
+
+export default function AlbumGallery() {{
+  const [media, setMedia] = useState([]);
+
+  useEffect(() => {{
+    fetch('{endpoint_url}')
+      .then(res => res.text())
+      .then(htmlText => {{
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(htmlText, 'text/html');
+          const json = JSON.parse(doc.getElementById('voidememo-api-data').innerText);
+          if(json.status === 'success') setMedia(json.data);
+      }});
+  }}, []);
+
+  return (
+    <div className="grid gap-4 grid-cols-3">
+      {{media.map((item, i) => (
+        item.resource_type === 'image' 
+          ? <img key={{i}} src={{item.url}} alt={{item.filename}} className="rounded-lg"/>
+          : <video key={{i}} src={{item.url}} controls className="rounded-lg" />
+      ))}}
+    </div>
+  );
+}}""", language="javascript")
+
+        with t3:
+            st.code(f"""# Python (Django / Flask / Streamlit) Implementation
+import requests
+from bs4 import BeautifulSoup
+import json
+
+API_URL = "{endpoint_url}"
+
+def get_album_media():
+    response = requests.get(API_URL)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, 'html.parser')
+        data_div = soup.find(id="voidememo-api-data")
+        if data_div:
+            json_data = json.loads(data_div.string)
+            if json_data.get("status") == "success":
+                return json_data["data"]
+    return []
+
+# Example Usage
+for media in get_album_media():
+    print(f"File: {{media['filename']}} | Link: {{media['url']}}")
+""", language="python")
+
+        st.warning("⚠️ Keep your API URL private. Anyone with this endpoint can view the media inside this specific album.")
+
+
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
     st.write(f"Are you sure you want to completely delete **{html.escape(folder_name)}** and everything inside it?")
@@ -365,7 +510,7 @@ def locked_reaction_dialog(remaining_seconds):
     if st.button("Got it", use_container_width=True): st.rerun()
 
 # ==========================================
-# 9. MUTEX FULL-SCREEN OVERLAYS
+# 10. MUTEX FULL-SCREEN OVERLAYS
 # ==========================================
 def render_share_media_overlay(target_data, mode):
     st.markdown("<style>header {display: none;} .block-container {padding: 3rem 1rem !important; max-width: 800px;}</style>", unsafe_allow_html=True)
@@ -859,10 +1004,8 @@ if not st.session_state.logged_in:
 
     if app_page == "landing":
         landing_html = """<style>
-div.block-container { background: transparent !important; padding: 0 !important; margin: 0 !important; max-width: 100% !important; border: none !important; box-shadow: none !important; }
-div.block-container::before { display: none !important; }
-header { display: none !important; }
-.stApp, .main, [data-testid="stAppViewContainer"] { background: transparent !important; }
+div[data-testid="stAppViewBlockContainer"] { background: transparent !important; padding: 0 !important; margin: 0 !important; max-width: 100vw !important; border: none !important; box-shadow: none !important; }
+div[data-testid="stAppViewBlockContainer"]::before { display: none !important; }
 </style>
 <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999; display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.85) 100%);">
 <div style="position: absolute; top: 0; left: 0; width: 100%; padding: 20px 5%; display: flex; justify-content: space-between; align-items: center;">
@@ -894,7 +1037,7 @@ p, h1, h2, h3, h4, h5, h6, span, label, li { color: #ffffff !important; }
 .stButton > button[kind="primary"] { background-color: #0a84ff !important; color: #ffffff !important; border: none !important; border-radius: 12px !important; padding: 14px 24px !important; font-weight: 600 !important; width: 100% !important; margin-top: 10px !important; box-shadow: 0 4px 15px rgba(10, 132, 255, 0.4) !important; }
 
 /* The containing block fix: Remove backdrop-filter from parent, apply to ::before */
-div.block-container { 
+div[data-testid="stAppViewBlockContainer"] { 
     padding: 50px 40px !important; 
     max-width: 480px !important; 
     margin: 12vh auto 5vh auto !important; 
@@ -905,7 +1048,7 @@ div.block-container {
     box-shadow: none !important;
 }
 
-div.block-container::before {
+div[data-testid="stAppViewBlockContainer"]::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -919,7 +1062,7 @@ div.block-container::before {
 }
 
 @media (max-width: 768px) { 
-    div.block-container { 
+    div[data-testid="stAppViewBlockContainer"] { 
         max-width: 92% !important; 
         margin: 18vh auto 5vh auto !important; 
         padding: 30px 20px !important; 
@@ -929,7 +1072,7 @@ div.block-container::before {
         st.markdown(auth_css, unsafe_allow_html=True)
         
         if app_page == "policy":
-            st.markdown("<style>div.block-container { max-width: 800px !important; }</style>", unsafe_allow_html=True)
+            st.markdown("<style>div[data-testid='stAppViewBlockContainer'] { max-width: 800px !important; }</style>", unsafe_allow_html=True)
 
         nav_html = """<div style="position: fixed; top: 0; left: 0; width: 100vw; padding: 20px 5%; display: flex; justify-content: space-between; align-items: center; z-index: 999999; background: rgba(0,0,0,0.5); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(255,255,255,0.1);">
 <a href="?page=landing" target="_self" style="font-size: 24px; font-weight: 800; color: white !important; text-decoration: none; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">voidememo</a>
@@ -1106,16 +1249,16 @@ else:
 p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
 
 /* Dashboard layout reset */
-div.block-container { 
-    max-width: 100% !important; 
+div[data-testid="stAppViewBlockContainer"] { 
+    max-width: 100vw !important; 
     padding: 20px 5% 80px 5% !important; 
-    margin: 0 auto !important; 
+    margin: 0 !important; 
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
     backdrop-filter: none !important;
 }
-div.block-container::before { display: none !important; content: none !important; }
+div[data-testid="stAppViewBlockContainer"]::before { display: none !important; content: none !important; }
 
 .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 9999999 !important; pointer-events: auto !important; margin-bottom: 20px; }
 .brand-logo { font-size: 24px; font-weight: 800; color: var(--accent) !important; letter-spacing: 0.5px; text-decoration: none; position:relative; z-index:100; }
@@ -1148,7 +1291,7 @@ div.block-container::before { display: none !important; content: none !important
 .profile-header-widget span { font-weight: 600; font-size: 15px;}
 .profile-notif-dot { position: absolute; top: 2px; right: 8px; width: 11px; height: 11px; background-color: #ff3b30; border-radius: 50%; border: 1.5px solid var(--bg-card); box-shadow: 0 0 5px rgba(255, 59, 48, 0.5); z-index: 20; }
 .custom-footer { margin-top: 50px; width: 100%; text-align: center; padding: 20px 0; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; clear: both; }
-@media (max-width: 768px) { .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; } .brand-logo { font-size: 28px; margin-bottom: 10px;} div.block-container { padding-top: 1rem !important; } }
+@media (max-width: 768px) { .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; } .brand-logo { font-size: 28px; margin-bottom: 10px;} div[data-testid="stAppViewBlockContainer"] { padding-top: 1rem !important; } }
 </style>"""
         st.markdown(dash_css, unsafe_allow_html=True)
 
@@ -1290,7 +1433,7 @@ div.block-container::before { display: none !important; content: none !important
                     if st.button("Create Album", type="primary"):
                         clean_folder_name = str(new_folder).strip()
                         if clean_folder_name:
-                            folders_col.insert_one({"username": st.session_state.username, "folder_name": clean_folder_name, "parent_id": actual_folder_id, "cover_photo": "", "is_locked": False})
+                            folders_col.insert_one({"username": st.session_state.username, "folder_name": clean_folder_name, "parent_id": actual_folder_id, "cover_photo": "", "is_locked": False, "api_key": "", "api_enabled": False})
                             st.session_state.folder_key += 1; st.rerun()
             else:
                 st.markdown('<div class="folder-options-btn" style="display: flex; justify-content: flex-end;">', unsafe_allow_html=True)
@@ -1298,6 +1441,11 @@ div.block-container::before { display: none !important; content: none !important
                     st.markdown("**Album Management**")
                     if st.button("✏️ Rename Album", key=f"edit_{current['_id']}", use_container_width=True): rename_folder_dialog(current["_id"], current["folder_name"])
                     if st.button("🗑 Delete Album", key=f"del_fold_{current['_id']}", use_container_width=True): delete_folder_dialog(current["_id"], current["folder_name"])
+                    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+                    
+                    st.markdown("**Developer & API**")
+                    if st.button("⚡ Developer API", key=f"api_{current['_id']}", use_container_width=True): developer_api_dialog(current["_id"])
+                    
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     st.markdown("**Sharing & Privacy**")
                     
