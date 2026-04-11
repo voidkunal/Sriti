@@ -17,10 +17,40 @@ import datetime
 import html
 import secrets 
 
-# ---------------- UI CONFIG ----------------
+# ==========================================
+# 1. UI CONFIGURATION & SETUP
+# ==========================================
 st.set_page_config(page_title="voidememo Vault", page_icon="🌐", layout="wide", initial_sidebar_state="collapsed")
 
-# ---------------- CONFIG (PRODUCTION SAFE) ----------------
+# ABSOLUTE VIEWPORT RESET: Kills the hidden sidebar space pushing content off-center
+st.markdown("""
+<style>
+    /* Nuke Streamlit's sidebar and collapse control */
+    [data-testid="stSidebar"], [data-testid="stSidebarNav"], [data-testid="collapsedControl"] { 
+        display: none !important; 
+        width: 0 !important; 
+        min-width: 0 !important; 
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Force the core app container to exactly 100% width with 0 offset */
+    .stApp, [data-testid="stAppViewContainer"], .main {
+        width: 100vw !important;
+        max-width: 100vw !important;
+        margin-left: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        left: 0 !important;
+    }
+    
+    header[data-testid="stHeader"] { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 2. DATABASE & CLOUD CONFIGURATION
+# ==========================================
 MONGO_URI = st.secrets["MONGO_URI"]
 
 client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where())
@@ -38,7 +68,9 @@ cloudinary.config(
     api_secret=st.secrets["CLOUDINARY_API_SECRET"]
 )
 
-# ---------------- UTILS & SECURITY / AUTHENTICATION ----------------
+# ==========================================
+# 3. UTILITIES & SECURITY FUNCTIONS
+# ==========================================
 def hash_password(password):
     pwd_str = str(password).strip()
     pepper = st.secrets.get("APP_PEPPER", "")
@@ -117,7 +149,9 @@ def send_otp_email(receiver_email, otp):
         st.error("Failed to send secure email. Please try again later.")
         return False
 
-# ---------------- NATIVE GESTURE ROUTING SYSTEM ----------------
+# ==========================================
+# 4. NATIVE GESTURE ROUTING SYSTEM
+# ==========================================
 def get_nav_link(page=None, view=None, tab=None, folder=None, story_group=None, story_idx=None, lightbox_idx=None, profile_hub=None, ai_chat=None, react=None, action=None, file_id=None):
     params = []
     if page is not None: params.append(f"page={page}")
@@ -157,8 +191,11 @@ if not st.session_state.logged_in and "session" in st.query_params:
         st.session_state.logged_in = True
         st.session_state.username = user["username"]
 
-# --- HANDLE LIGHTBOX ACTIONS & STORY REACTIONS (Pre-Render Routing) ---
+# ==========================================
+# 5. PRE-RENDER ACTION INTERCEPTORS
+# ==========================================
 if st.session_state.logged_in:
+    
     if "action" in st.query_params and "file_id" in st.query_params:
         try:
             action = st.query_params["action"]
@@ -211,7 +248,9 @@ if st.session_state.logged_in:
         if "file_id" in st.query_params: del st.query_params["file_id"]
         st.rerun()
 
-# ---------------- TIME-SEEDED DETERMINISTIC ENGINE ----------------
+# ==========================================
+# 6. TIME-SEEDED DETERMINISTIC ENGINE
+# ==========================================
 if st.session_state.logged_in:
     time_window = int(time.time() / 300) 
     random.seed(f"{st.session_state.username}_{time_window}") 
@@ -227,10 +266,9 @@ if st.session_state.logged_in:
             age_days = (now - upload_date).days
             if age_days <= 7: recent.append(f)
             
-            # WEEKLY FAVORITES LOGIC (Tag age > 7 days)
             if f.get("tag"):
                 tag_age_seconds = time.time() - f.get("tag_time", 0)
-                if tag_age_seconds >= 604800: # 7 Days
+                if tag_age_seconds >= 604800: # 7 Days delay logic
                     favorites.append(f)
                     
             if age_days > 30: throwback.append(f)
@@ -252,121 +290,10 @@ if st.session_state.logged_in:
     st.session_state.story_groups = story_groups
     random.seed() 
 
-# ---------------- CORE CSS ----------------
-def inject_global_css():
-    css = """
-    <style>
-    :root {
-        --bg-app: #f2f2f7; --bg-card: #ffffff; --bg-sidebar: #f2f2f7; --bg-input: #ffffff;
-        --text-primary: #000000; --text-secondary: #8e8e93; --border: #d1d1d6; --accent: #007aff; --btn-hover: #e5e5ea;
-    }
-    @media (prefers-color-scheme: dark) {
-        :root {
-            --bg-app: #000000; --bg-card: #1c1c1e; --bg-sidebar: #000000; --bg-input: #1c1c1e;
-            --text-primary: #ffffff; --text-secondary: #8e8e93; --border: #38383a; --accent: #0a84ff; --btn-hover: #2c2c2e;
-        }
-    }
-    .stApp { background-color: var(--bg-app) !important; color: var(--text-primary) !important; }
-    p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
-    
-    header[data-testid="stHeader"] { display: none !important; opacity: 0 !important; pointer-events: none !important; height: 0 !important; }
-    div[data-testid="stToolbar"] { display: none !important; pointer-events: none !important; }
-    div[data-testid="stDecoration"] { display: none !important; pointer-events: none !important; }
-    #MainMenu { visibility: hidden; } .stDeployButton { display: none !important; }
-    [data-testid="stSidebar"] { display: none !important; }
-    [data-testid="collapsedControl"] { display: none !important; }
-    
-    div[data-testid="stAppViewBlockContainer"] { z-index: 10 !important; padding-top: 1rem !important; }
-    div[data-testid="stMarkdownContainer"] { position: relative; z-index: 50; pointer-events: auto !important; }
 
-    .title-text { color: var(--text-primary) !important; font-weight: 800; font-size: 32px; text-align: center; margin-bottom: 5px; }
-    .sub-text { color: var(--text-secondary) !important; font-size: 15px; text-align: center; margin-bottom: 30px; }
-    .brand-logo { font-size: 24px; font-weight: 800; color: var(--accent) !important; letter-spacing: 0.5px; text-decoration: none; }
-    .muted-text { color: var(--text-secondary) !important; }
-
-    .auth-container, .content-card {
-        max-width: 480px !important; width: 90% !important; background-color: var(--bg-card) !important;
-        padding: 50px 40px !important; border-radius: 20px !important; border: 1px solid var(--border) !important; margin: 8vh auto !important; 
-        position: relative; z-index: 9999999 !important; pointer-events: auto !important;
-    }
-    .content-card { max-width: 800px !important; }
-    .stTextInput div[data-baseweb="input"], .stDateInput div[data-baseweb="input"], .stTextArea div[data-baseweb="textarea"] {
-        background-color: var(--bg-input) !important; border: 1.5px solid var(--border) !important; border-radius: 12px !important; 
-    }
-    .stTextInput input, .stDateInput input, .stTextArea textarea { 
-        background-color: transparent !important; color: var(--text-primary) !important; padding: 14px 16px !important; font-size: 15px !important; 
-    }
-    .stButton > button[kind="primary"] { 
-        background-color: var(--accent) !important; color: #ffffff !important; border: none !important; border-radius: 12px !important; 
-        padding: 14px 24px !important; font-weight: 600 !important; width: 100% !important; margin-top: 10px !important; 
-    }
-    .native-link { color: var(--accent) !important; text-decoration: none; font-weight: 600; cursor: pointer;} .native-link:hover { text-decoration: underline; }
-    
-    .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 9999999 !important; pointer-events: auto !important; margin-bottom: 20px; }
-
-    .dashboard-title { font-size: 32px; font-weight: 800; color: var(--text-primary); margin: 0; }
-    
-    .story-wrapper { display: flex; overflow-x: auto; gap: 15px; padding: 10px 0 20px 0; margin-bottom: 10px; }
-    .story-wrapper::-webkit-scrollbar { display: none; }
-    .story-link { text-decoration: none; display: inline-block; }
-    .story-item { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 85px; cursor: pointer; transition: transform 0.2s; }
-    .story-item:hover { transform: scale(1.05); }
-    .story-ring { width: 76px; height: 76px; border-radius: 50%; padding: 3px; display: flex; align-items: center; justify-content: center; }
-    .story-inner { width: 100%; height: 100%; border-radius: 50%; border: 3px solid var(--bg-app); overflow: hidden; background: var(--bg-card); display: flex; align-items: center; justify-content: center; font-size: 24px; }
-    .story-inner img, .story-inner video { width: 100%; height: 100%; object-fit: cover; }
-    .story-label { font-size: 12px; font-weight: 600; color: var(--text-primary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80px;}
-
-    .album-link { text-decoration: none; display: block; }
-    .album-card { margin-bottom: 15px; transition: transform 0.2s ease; position: relative; }
-    .album-card:hover { transform: scale(1.02); }
-    .folder-card { position: relative; width: 100%; aspect-ratio: 1/1; border-radius: 12px; background-color: var(--bg-card); border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 8px; transition: transform 0.2s ease; }
-    .folder-card:hover { transform: scale(1.02); }
-
-    .media-container-wrapper { position: relative; margin-bottom: 15px; cursor: pointer; }
-    .media-container-wrapper:hover .square-media { transform: scale(1.02); }
-    
-    /* PERFECT CIRCULAR GRID LOGIC */
-    .square-media { width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: var(--bg-card); border: 1px solid var(--border); }
-    .square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
-    
-    [data-testid="column"] { position: relative; }
-    .folder-options-btn [data-testid="stPopover"] > button {
-        background-color: var(--bg-card) !important; color: var(--text-primary) !important;
-        border: 1px solid var(--border) !important; border-radius: 8px !important; height: 38px !important;
-        padding: 0 15px !important; font-weight: 600 !important; box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important;
-    }
-    .folder-options-btn [data-testid="stPopover"] > button:hover { background-color: var(--btn-hover) !important; }
-    
-    [data-testid="stFileUploader"] > div { background-color: var(--bg-card) !important; border: 1px dashed var(--border) !important; border-radius: 16px !important; padding: 20px !important; }
-    
-    .profile-header-widget { display: inline-flex; align-items: center; gap: 12px; background: transparent; padding: 6px 12px; border-radius: 50px; transition: transform 0.2s; cursor: pointer; color: var(--text-primary) !important; position: relative; text-decoration: none; }
-    .profile-header-widget:hover { transform: scale(1.02); text-decoration: none; }
-    .profile-header-widget img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
-    .profile-header-widget span { font-weight: 600; font-size: 15px;}
-    .profile-notif-dot { position: absolute; top: 2px; right: 8px; width: 11px; height: 11px; background-color: #ff3b30; border-radius: 50%; border: 1.5px solid var(--bg-card); box-shadow: 0 0 5px rgba(255, 59, 48, 0.5); z-index: 20; }
-
-    .block-container { padding-bottom: 80px !important; min-height: 85vh; }
-    .custom-footer { margin-top: 50px; width: 100%; text-align: center; padding: 20px 0; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; clear: both; }
-    
-    .masonry-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; padding: 10px 0 40px 0; }
-    .gallery-item { position: relative; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); background: #000; aspect-ratio: 4/5; }
-    .gallery-item img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.4s ease; opacity: 0.9; }
-    .gallery-item:hover img { transform: scale(1.08); opacity: 1; }
-    .gallery-overlay { position: absolute; bottom: 0; left: 0; width: 100%; background: linear-gradient(transparent, rgba(0,0,0,0.8)); padding: 20px 15px 15px 15px; pointer-events: none; }
-    .gallery-title { color: white; font-size: 15px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
-
-    @media (max-width: 768px) {
-        .auth-container, .content-card { border: none !important; border-radius: 0 !important; padding: 30px 20px !important; margin: 0 !important; width: 100% !important; max-width: 100% !important; pointer-events: auto !important;}
-        .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; z-index: 9999999 !important; pointer-events: auto !important;}
-        .brand-logo { font-size: 28px; margin-bottom: 10px;}
-        .masonry-gallery { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 5px; }
-        .block-container { padding-top: 1rem !important; } 
-    }
-    </style>
-    """
-    st.markdown(css.replace('\n', ''), unsafe_allow_html=True)
-
-# ================= DIALOG FUNCTIONS =================
+# ==========================================
+# 8. DIALOG FUNCTIONS
+# ==========================================
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
     st.write(f"Are you sure you want to completely delete **{html.escape(folder_name)}** and everything inside it?")
@@ -437,8 +364,18 @@ def locked_reaction_dialog(remaining_seconds):
     st.info(f"Time remaining: **{hours} hours and {minutes} minutes**")
     if st.button("Got it", use_container_width=True): st.rerun()
 
-@st.dialog("🔗 Share Media Batch", width="large")
-def share_media_dialog(target_data, mode):
+# ==========================================
+# 9. MUTEX FULL-SCREEN OVERLAYS
+# ==========================================
+def render_share_media_overlay(target_data, mode):
+    st.markdown("<style>header {display: none;} .block-container {padding: 3rem 1rem !important; max-width: 800px;}</style>", unsafe_allow_html=True)
+    c1, c2 = st.columns([10, 1])
+    c1.markdown("## 🔗 Share Media")
+    if c2.button("✕", key="close_share_overlay"):
+        if "share_folder" in st.query_params: del st.query_params["share_folder"]
+        st.session_state.pending_share = None
+        st.rerun()
+
     curr_user = users_col.find_one({"username": st.session_state.username})
     user_pin = curr_user.get("pin_code", "")
     
@@ -448,9 +385,7 @@ def share_media_dialog(target_data, mode):
             folder_files = list(files_col.find({"username": st.session_state.username, "folder_id": cf_id}))
             if not folder_files:
                 st.info("No media files found to share in this folder.")
-                if st.button("Close"): 
-                    st.rerun()
-                return
+                st.stop()
             st.markdown("### 1. Select Media to Share")
             media_options = {html.escape(f['filename']) if f.get('filename') else str(f['_id']): f['_id'] for f in folder_files}
             selected_media_filenames = st.multiselect("Choose files from this album:", list(media_options.keys()), default=list(media_options.keys()), key="ms_media")
@@ -462,8 +397,7 @@ def share_media_dialog(target_data, mode):
             if file_doc: st.write(f"Sharing: **{html.escape(file_doc.get('filename', 'Media Item'))}**")
     except InvalidId:
         st.error("Invalid media reference.")
-        if st.button("Close"): st.rerun()
-        return
+        st.stop()
 
     st.markdown("### 2. Discover Users")
     tab_n, tab_s = st.tabs(["📍 Nearby Users", "🔍 Search Global"])
@@ -485,9 +419,8 @@ def share_media_dialog(target_data, mode):
             
     final_selection = list(set(selected_users))
     st.write("<br>", unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
     
-    if c1.button(f"Send to {len(final_selection)} users", type="primary", disabled=len(final_selection)==0 or len(selected_media_ids)==0, use_container_width=True):
+    if st.button(f"Send to {len(final_selection)} users", type="primary", disabled=len(final_selection)==0 or len(selected_media_ids)==0, use_container_width=True):
         for u in final_selection:
             share_res = shares_col.insert_one({
                 "sender": st.session_state.username, "receiver": u,
@@ -498,31 +431,28 @@ def share_media_dialog(target_data, mode):
             notifications_col.insert_one({"username": u, "sender": st.session_state.username, "type": "share", "share_id": share_res.inserted_id, "message": msg_text, "is_read": False, "created_at": time.time()})
         st.success("Shared successfully!")
         time.sleep(1)
-        st.session_state.pending_share = None
         if "share_folder" in st.query_params: del st.query_params["share_folder"]
+        st.session_state.pending_share = None
         st.rerun()
-        
-    if c2.button("Cancel", use_container_width=True):
-        st.session_state.pending_share = None
-        if "share_folder" in st.query_params: del st.query_params["share_folder"]
+    st.stop()
+
+
+def render_preview_shared_overlay(notif_id_str):
+    st.markdown("<style>header {display: none;} .block-container {padding: 3rem 1rem !important; max-width: 900px;}</style>", unsafe_allow_html=True)
+    c1, c2 = st.columns([10, 1])
+    c1.markdown("## 📬 Shared Media Preview")
+    if c2.button("✕", key="close_preview_overlay"):
+        del st.query_params["preview_notif"]
         st.rerun()
 
-@st.dialog("📬 Shared Media Preview", width="large")
-def preview_shared_dialog(notif_id_str):
     try: notif_oid = ObjectId(notif_id_str)
-    except InvalidId:
-        if st.button("Close"): del st.query_params["preview_notif"]; st.rerun()
-        return
+    except InvalidId: st.stop()
 
     notif = notifications_col.find_one({"_id": notif_oid})
-    if not notif:
-        if st.button("Close"): del st.query_params["preview_notif"]; st.rerun()
-        return
+    if not notif: st.stop()
 
-    # STRICT Reaction Preview Context
     if notif.get("type") == "share_reaction":
         st.info(f"**{html.escape(notif['sender'])}** {html.escape(notif['message'])}")
-        
         share_id_val = notif.get("share_id")
         if isinstance(share_id_val, str): share_id_val = ObjectId(share_id_val)
         share = shares_col.find_one({"_id": share_id_val}) if share_id_val else None
@@ -545,15 +475,14 @@ def preview_shared_dialog(notif_id_str):
             notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
             del st.query_params["preview_notif"]
             st.rerun()
-        return
+        st.stop()
 
-    # Standard Share Content Display
+    # Standard Share Review
     share = shares_col.find_one({"_id": notif.get("share_id")})
     media_ids = share.get("media_ids", []) if share else []
     if not media_ids:
         st.error("Shared media no longer exists.")
-        if st.button("Close"): del st.query_params["preview_notif"]; st.rerun()
-        return
+        st.stop()
 
     st.markdown(f"**From:** {html.escape(notif['sender'])} | **Includes:** {share['count']} memory copies.")
     st.write("<br>", unsafe_allow_html=True)
@@ -580,7 +509,9 @@ def preview_shared_dialog(notif_id_str):
         for e_idx, em in enumerate(["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]):
             if e_cols[e_idx % 4].button(em, key=f"sreact_{em}", use_container_width=True):
                 notifications_col.insert_one({"username": notif['sender'], "sender": st.session_state.username, "type": "share_reaction", "share_id": notif.get("share_id"), "message": f"reacted {em} to your shared memory.", "is_read": False, "created_at": time.time()})
-                st.success(f"Sent {em} to {html.escape(notif['sender'])}!"); time.sleep(1); st.rerun()
+                st.success(f"Sent {em} to {html.escape(notif['sender'])}!"); time.sleep(1)
+                del st.query_params["preview_notif"]
+                st.rerun()
 
     st.write("<br>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
@@ -588,7 +519,6 @@ def preview_shared_dialog(notif_id_str):
         root = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
         root_id = root["_id"] if root else None
         
-        # EXACT SINGLE FOLDER RESOLUTION
         shared_folder = folders_col.find_one({"username": st.session_state.username, "folder_name": {"$regex": "^Shared Media$", "$options": "i"}, "parent_id": root_id})
         if not shared_folder:
             res = folders_col.insert_one({"username": st.session_state.username, "folder_name": "Shared Media", "parent_id": root_id, "cover_photo": "", "is_locked": False})
@@ -607,17 +537,20 @@ def preview_shared_dialog(notif_id_str):
     if c2.button("Mark Read & Close", use_container_width=True):
         notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
         del st.query_params["preview_notif"]; st.rerun()
+    st.stop()
 
-@st.dialog("👤 Profile Hub", width="large")
-def render_profile_hub_fullscreen():
-    # Enforces full screen behavior properly managed via state
-    st.markdown("""<style>
-        div[data-testid="stDialog"] > div[role="dialog"] { width: 100vw !important; max-width: 100vw !important; height: 100vh !important; max-height: 100vh !important; margin: 0 !important; border-radius: 0 !important; background: var(--bg-app) !important; padding: 40px 5% !important; overflow-y: auto !important;}
-        div[data-testid="stDialog"] button[aria-label="Close"] { top: 20px; right: 20px; transform: scale(1.5); }
-    </style>""", unsafe_allow_html=True)
+
+def render_profile_hub_overlay():
+    st.markdown("<style>header {display: none;} .block-container {padding: 3rem 5% !important; max-width: 100vw;}</style>", unsafe_allow_html=True)
     
     user_data = users_col.find_one({"username": st.session_state.username})
-    st.markdown('<div class="dashboard-title" style="margin-bottom: 20px;">Profile Hub</div>', unsafe_allow_html=True)
+    
+    c1, c2 = st.columns([10, 1])
+    c1.markdown('<div class="dashboard-title" style="margin-bottom: 20px;">Profile Hub</div>', unsafe_allow_html=True)
+    if c2.button("✕", key="close_hub_overlay"):
+        del st.query_params["profile_hub"]
+        st.rerun()
+
     p_tab1, p_tab2, p_tab3 = st.tabs(["⚙️ Settings", "🔔 Notifications", "👥 Switch Profiles"])
     
     with p_tab1:
@@ -700,7 +633,8 @@ def render_profile_hub_fullscreen():
                         notifications_col.update_one({"_id": n['_id']}, {"$set": {"is_read": True}})
                         if n.get("type") in ["share", "share_reaction"]: 
                             st.query_params["preview_notif"] = str(n['_id'])
-                        del st.query_params["profile_hub"]; st.rerun()
+                            del st.query_params["profile_hub"]
+                        st.rerun()
                 with col_del:
                     if st.button("❌", key=f"deln_{n['_id']}", help="Delete notification"):
                         notifications_col.delete_one({"_id": n['_id']})
@@ -717,49 +651,62 @@ def render_profile_hub_fullscreen():
                     users_col.update_one({"username": sib["username"]}, {"$set": {"session_token": token}})
                     st.session_state.username = sib["username"]
                     st.query_params["session"] = token
-                    st.query_params.pop("profile_hub", None); st.rerun()
+                    del st.query_params["profile_hub"]; st.rerun()
                     
         if len(siblings) < 5:
-            st.info("You can create up to 5 completely separate vaults using this exact same email address. Just completely log out, go back to the Sign Up page, enter this email, and provide your phone number for validation.")
+            st.info("You can create up to 5 profiles using this email. Create a new account via the signup page using this email address.")
+    st.stop()
 
-@st.dialog("✨ Vault Assistant")
-def render_ai_chat_dialog():
-    st.markdown("<p class='muted-text'>Ask me directly about your storage, files, or account.</p>", unsafe_allow_html=True)
+
+def render_ai_chat_overlay():
+    st.markdown("<style>header {display: none;} .block-container {padding: 3rem 1rem !important;}</style>", unsafe_allow_html=True)
+    _, center_col, _ = st.columns([1, 2.5, 1])
     
-    if "ai_messages" not in st.session_state:
-        st.session_state.ai_messages = [{"role": "assistant", "content": "Hello! I can provide exact counts of your photos and albums, or factual information about your vault."}]
-    
-    chat_container = st.container(height=350)
-    with chat_container:
-        for msg in st.session_state.ai_messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-    
-    if prompt := st.chat_input("Ask a question about your vault..."):
-        st.session_state.ai_messages.append({"role": "user", "content": prompt})
-        
-        total_files = files_col.count_documents({"username": st.session_state.username})
-        total_images = files_col.count_documents({"username": st.session_state.username, "resource_type": "image"})
-        total_videos = files_col.count_documents({"username": st.session_state.username, "resource_type": "video"})
-        total_folders = folders_col.count_documents({"username": st.session_state.username, "folder_name": {"$ne": "root"}})
-        user_doc = users_col.find_one({"username": st.session_state.username})
-        
-        lower_p = prompt.lower()
-        if any(w in lower_p for w in ["how many", "count", "number of", "total"]):
-            if any(w in lower_p for w in ["photo", "image", "pic"]): reply = f"You have {total_images} photos."
-            elif any(w in lower_p for w in ["video", "vid"]): reply = f"You have {total_videos} videos."
-            elif any(w in lower_p for w in ["folder", "album"]): reply = f"You have {total_folders} albums."
-            else: reply = f"You have {total_files} items in total."
-        elif "latest" in lower_p or "recent" in lower_p:
-             recent_file = files_col.find_one({"username": st.session_state.username}, sort=[("_id", -1)])
-             reply = f"Your most recent file was uploaded on {recent_file['_id'].generation_time.strftime('%b %d, %Y')}." if recent_file else "You haven't uploaded anything yet."
-        elif "pin" in lower_p or "location" in lower_p:
-            reply = f"Your vault PIN is {user_doc.get('pin_code')}."
-        else:
-            reply = f"I am your Vault AI. Ask factual questions like 'how many photos do I have?' or 'what is my PIN?'."
+    with center_col:
+        c1, c2 = st.columns([10, 1])
+        c1.markdown('<div class="dashboard-title" style="margin-bottom: 5px;">Vault AI</div>', unsafe_allow_html=True)
+        if c2.button("✕", key="close_ai_overlay"):
+            del st.query_params["ai_chat"]
+            st.rerun()
             
-        st.session_state.ai_messages.append({"role": "assistant", "content": reply})
-        st.rerun()
+        st.markdown("<p class='muted-text'>Ask me directly about your storage, files, or account.</p>", unsafe_allow_html=True)
+        
+        if "ai_messages" not in st.session_state:
+            st.session_state.ai_messages = [{"role": "assistant", "content": "Hello! I can provide exact counts of your photos and albums, or factual information about your vault."}]
+        
+        chat_container = st.container(height=500)
+        with chat_container:
+            for msg in st.session_state.ai_messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+        
+        if prompt := st.chat_input("Ask a question about your vault..."):
+            st.session_state.ai_messages.append({"role": "user", "content": prompt})
+            
+            total_files = files_col.count_documents({"username": st.session_state.username})
+            total_images = files_col.count_documents({"username": st.session_state.username, "resource_type": "image"})
+            total_videos = files_col.count_documents({"username": st.session_state.username, "resource_type": "video"})
+            total_folders = folders_col.count_documents({"username": st.session_state.username, "folder_name": {"$ne": "root"}})
+            user_doc = users_col.find_one({"username": st.session_state.username})
+            
+            lower_p = prompt.lower()
+            if any(w in lower_p for w in ["how many", "count", "number of", "total"]):
+                if any(w in lower_p for w in ["photo", "image", "pic"]): reply = f"You have {total_images} photos."
+                elif any(w in lower_p for w in ["video", "vid"]): reply = f"You have {total_videos} videos."
+                elif any(w in lower_p for w in ["folder", "album"]): reply = f"You have {total_folders} albums."
+                else: reply = f"You have {total_files} items in total."
+            elif "latest" in lower_p or "recent" in lower_p:
+                 recent_file = files_col.find_one({"username": st.session_state.username}, sort=[("_id", -1)])
+                 reply = f"Your most recent file was uploaded on {recent_file['_id'].generation_time.strftime('%b %d, %Y')}." if recent_file else "You haven't uploaded anything yet."
+            elif "pin" in lower_p or "location" in lower_p:
+                reply = f"Your vault PIN is {user_doc.get('pin_code')}."
+            else:
+                reply = f"I am your Vault AI. Ask factual questions like 'how many photos do I have?' or 'what is my PIN?'."
+                
+            st.session_state.ai_messages.append({"role": "assistant", "content": reply})
+            st.rerun()
+    st.stop()
+
 
 # --- FULL-SCREEN LIGHTBOX & STORY RENDERERS ---
 def render_lightbox_fullscreen(idx, folder_id_str):
@@ -820,10 +767,10 @@ def render_lightbox_fullscreen(idx, folder_id_str):
         
     current_react = f"<div style='position:absolute; top:25px; left:25px; font-size: 32px; z-index:10000000;'>{html.escape(file.get('tag', ''))}</div>" if file.get("tag") else ""
 
-    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>.liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>{current_react}{action_html}{react_html} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
+    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>header {{display: none !important;}} .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; left: 25px;">✕</a>{current_react}{action_html}{react_html} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
-
     st.stop()
+
 
 def render_story_fullscreen(group_idx, story_idx):
     groups = st.session_state.get("story_groups", [])
@@ -855,17 +802,23 @@ def render_story_fullscreen(group_idx, story_idx):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # Clean 3-Dot Hover Menu for Story Reactions
-    emojis = ["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]
-    react_html = '<div class="story-menu"><div class="story-menu-btn">⋮</div><div class="story-menu-content">'
-    for em in emojis:
-        r_link = get_nav_link(page="app", folder="root", story_group=group_idx, story_idx=story_idx, react=em, file_id=str(item["_id"]))
-        react_html += f'<a href="{r_link}" target="_self" class="story-react-btn">{em}</a>'
-    react_html += '</div></div>'
+    time_elapsed = time.time() - item.get("tag_time", 0)
+    is_locked = bool(item.get("tag")) and (time_elapsed < 86400)
+    
+    if is_locked:
+        react_html = f'<div class="story-menu"><a href="{get_nav_link(page="app", folder="root", action="locked_react", file_id=str(item["_id"]))}" target="_self" class="story-menu-btn" style="text-decoration:none; width:auto; padding: 0 15px;">🔒 Locked</a></div>'
+    else:
+        emojis = ["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]
+        react_html = '<div class="story-menu"><div class="story-menu-btn">⋮</div><div class="story-menu-content">'
+        for em in emojis:
+            r_link = get_nav_link(page="app", folder="root", story_group=group_idx, story_idx=story_idx, react=em, file_id=str(item["_id"]))
+            react_html += f'<a href="{r_link}" target="_self" class="story-react-btn">{em}</a>'
+        react_html += '</div></div>'
 
     lightbox_ui = f"""
     <div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; box-sizing: border-box; background: #000000; z-index: 9999999; display: flex; flex-direction: column; align-items: center; justify-content: center;">
         <style>
+            header {{display: none !important;}}
             .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; transition: transform 0.2s ease; cursor: pointer; z-index: 10000000; }} 
             .liquid-btn:hover {{ background: rgba(255, 255, 255, 0.3); transform: scale(1.1); color: white; }} 
             .story-menu {{ position: absolute; top: 25px; left: 25px; z-index: 10000001; padding-bottom: 20px; }} 
@@ -892,63 +845,146 @@ def render_story_fullscreen(group_idx, story_idx):
 
 # ================= PUBLIC ROUTING (LOGGED OUT) =================
 if not st.session_state.logged_in:
-    inject_global_css()
     
     if app_page not in ["landing", "policy", "contact", "auth"]:
         st.query_params["page"] = "landing"
         st.rerun()
-    
-    if app_page != "auth":
-        nav_html = f"""<div class="top-nav"><a href="{get_nav_link('landing')}" target="_self" class="brand-logo">voidememo</a><div class="nav-links"><a href="{get_nav_link('landing')}" target="_self">Home</a><a href="{get_nav_link('policy')}" target="_self">Policy</a><a href="{get_nav_link('auth', 'login')}" target="_self" style="color: var(--accent) !important; font-weight: 700;">Log In</a></div></div>"""
-        st.markdown(nav_html.replace('\n', ''), unsafe_allow_html=True)
 
-        if app_page == "landing":
-            st.markdown('<div class="title-text" style="font-size: 3.5rem; margin-top: 4rem;">Secure Your Memories</div>', unsafe_allow_html=True)
-            st.markdown('<div class="sub-text" style="font-size: 1.25rem; max-width: 600px; margin: 0 auto 3rem auto;">Your personal digital bibliotheca. Access, organize, and protect your media with absolute privacy.</div>', unsafe_allow_html=True)
-            
-            btn_html = f'<div style="text-align: center; position: relative; z-index: 9999999 !important;"><a href="{get_nav_link("auth", "signup")}" target="_self" style="background: var(--accent); color: #ffffff; padding: 14px 30px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 16px; display: inline-block;">Create Free Vault</a></div>'
-            st.markdown(btn_html.replace('\n', ''), unsafe_allow_html=True)
-            st.write("<br><br><br><h3 style='text-align: center; margin-bottom: 30px;'>Community Vault Gallery</h3>", unsafe_allow_html=True)
-            
-            pipeline = [{"$match": {"resource_type": "image"}}, {"$lookup": {"from": "folders", "localField": "folder_id", "foreignField": "_id", "as": "folder_info"}}, {"$unwind": {"path": "$folder_info", "preserveNullAndEmptyArrays": True}}, {"$match": {"folder_info.is_locked": {"$ne": True}}}, {"$sample": {"size": 20}}]
-            community_images = list(files_col.aggregate(pipeline))
-            
-            fallback_urls = ["https://images.unsplash.com/photo-1472214103451-9374bd1c798e?auto=format&fit=crop&w=600&q=80", "https://images.unsplash.com/photo-1506744626753-eda818465c40?auto=format&fit=crop&w=600&q=80", "https://images.unsplash.com/photo-1510784722466-f2aa9c52fff6?auto=format&fit=crop&w=600&q=80", "https://images.unsplash.com/photo-1444464666168-49b6264240ce?auto=format&fit=crop&w=600&q=80"]
-            urls_to_show = [img["url"] for img in community_images]
-            while len(urls_to_show) < 20: urls_to_show.append(random.choice(fallback_urls))
-                
-            gallery_html = '<div class="masonry-gallery">'
-            for url in urls_to_show:
-                random_date = f"202{random.randint(3,6)} Memory"
-                safe_url = html.escape(url)
-                gallery_html += f'<div class="gallery-item"><img src="{safe_url}" loading="lazy"><div class="gallery-overlay"><div class="gallery-title">Community Vault ✨</div><div class="gallery-date">{random_date}</div></div></div>'
-            gallery_html += '</div>'
-            st.markdown(gallery_html.replace('\n', ''), unsafe_allow_html=True)
-            
-        elif app_page == "policy":
-            st.markdown("""<div class="content-card" style="position: relative; z-index: 10;"><h2>Privacy Policy & Permissions</h2><hr style='border-color: var(--border);'><h4>1. Data Collection</h4><p>We collect minimal information necessary to provide you with secure access to your digital bibliotheca.</p><h4>2. Media Storage Permissions</h4><p>By uploading files to voidememo, you grant us the permission to securely host and deliver this content back to you.</p></div>""", unsafe_allow_html=True)
-            
-        elif app_page == "contact":
-            st.markdown("""<div class="content-card" style="text-align: center; position: relative; z-index: 10;"><h2>Contact Support</h2><p>Have questions about your vault or our privacy policies? We are here to help.</p><br><h4>Email Support</h4><p><a href="mailto:support@voidememo.com" class="native-link">support@voidememo.com</a></p></div>""", unsafe_allow_html=True)
+    # Generate Universal Live Wallpaper
+    wallpaper_html = '<div class="live-wallpaper-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; z-index: -1; background: #000; pointer-events: none;"><div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">'
+    for i in range(60):
+        wallpaper_html += f'<img src="https://picsum.photos/seed/{i+9000}/400/600" class="live-wallpaper-img" style="width: 12vw; height: 18vw; object-fit: cover; border-radius: 12px; opacity: 0.35;" loading="lazy">'
+    wallpaper_html += '</div></div><style>@keyframes scroll-wallpaper { 0% { transform: rotate(-15deg) translateY(0); } 100% { transform: rotate(-15deg) translateY(-50%); } }</style>'
+    st.markdown(wallpaper_html, unsafe_allow_html=True)
 
-        st.markdown('<div class="custom-footer">© 2026 voidememo. All rights reserved.</div>', unsafe_allow_html=True)
-
-    # --- AUTHENTICATION FLOW ---
+    if app_page == "landing":
+        landing_html = """<style>
+div.block-container { background: transparent !important; padding: 0 !important; margin: 0 !important; max-width: 100% !important; border: none !important; box-shadow: none !important; }
+div.block-container::before { display: none !important; }
+header { display: none !important; }
+.stApp, .main, [data-testid="stAppViewContainer"] { background: transparent !important; }
+</style>
+<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999; display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.85) 100%);">
+<div style="position: absolute; top: 0; left: 0; width: 100%; padding: 20px 5%; display: flex; justify-content: space-between; align-items: center;">
+<a href="?page=landing" target="_self" style="font-size: 24px; font-weight: 800; color: white; text-decoration: none; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">voidememo</a>
+<div style="display: flex; gap: 20px; align-items: center;">
+<a href="?page=policy" target="_self" style="color: white; text-decoration: none; font-weight: 500; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">Policy</a>
+<a href="?page=auth&view=login" target="_self" style="color: white; text-decoration: none; font-weight: 700; background: #0a84ff; padding: 8px 20px; border-radius: 20px; box-shadow: 0 4px 10px rgba(10, 132, 255, 0.4);">Log In</a>
+</div>
+</div>
+<div style="font-size: clamp(3rem, 8vw, 5rem); font-weight: 900; color: white; margin-bottom: 10px; text-shadow: 0 4px 20px rgba(0,0,0,0.5); letter-spacing: -2px;">voidememo</div>
+<div style="font-size: clamp(1.1rem, 3vw, 1.5rem); color: #ddd; text-align: center; max-width: 600px; margin-bottom: 3rem; text-shadow: 0 2px 10px rgba(0,0,0,0.5); padding: 0 20px;">The Private Digital Bibliotheca. Access, organize, and protect your media with absolute privacy.</div>
+<div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;">
+<a href="?page=auth&view=signup" target="_self" style="background: white; color: black; padding: 14px 36px; border-radius: 50px; font-weight: 700; font-size: 16px; text-decoration: none; box-shadow: 0 4px 15px rgba(255,255,255,0.2); transition: transform 0.2s;">Create Free Vault</a>
+<a href="?page=auth&view=login" target="_self" style="background: rgba(0,0,0,0.4); color: white; border: 1px solid rgba(255,255,255,0.3); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 14px 36px; border-radius: 50px; font-weight: 700; font-size: 16px; text-decoration: none; transition: transform 0.2s;">Secure Login</a>
+</div>
+<div style="position: absolute; bottom: 20px; width: 100%; text-align: center; color: rgba(255,255,255,0.6); font-size: 13px;">© 2026 voidememo. All rights reserved.</div>
+</div>"""
+        st.markdown(landing_html, unsafe_allow_html=True)
+        
     else:
-        if auth_view not in ["login", "signup", "forgot"]:
-            st.query_params["view"] = "login"; st.rerun()
+        # Glassmorphism applied natively to Streamlit for Auth/Policy pages
+        auth_css = """<style>
+.stApp, .main, [data-testid="stAppViewContainer"] { background: transparent !important; }
+p, h1, h2, h3, h4, h5, h6, span, label, li { color: #ffffff !important; }
+.stTextInput div[data-baseweb="input"], .stDateInput div[data-baseweb="input"], .stTextArea div[data-baseweb="textarea"] { background-color: rgba(255, 255, 255, 0.1) !important; border: 1px solid rgba(255, 255, 255, 0.2) !important; border-radius: 12px !important; color: white !important; }
+.stTextInput input, .stDateInput input, .stTextArea textarea { color: white !important; padding: 14px 16px !important; font-size: 15px !important; }
+::placeholder { color: rgba(255,255,255,0.6) !important; }
+.stCheckbox label p { color: white !important; }
+.stButton > button[kind="primary"] { background-color: #0a84ff !important; color: #ffffff !important; border: none !important; border-radius: 12px !important; padding: 14px 24px !important; font-weight: 600 !important; width: 100% !important; margin-top: 10px !important; box-shadow: 0 4px 15px rgba(10, 132, 255, 0.4) !important; }
 
-        st.markdown('<div class="auth-container">', unsafe_allow_html=True)
-        if auth_view == "login":
-            st.markdown('<div class="title-text">Welcome Back</div><div class="sub-text">Please enter your credentials to log in</div>', unsafe_allow_html=True)
+/* The containing block fix: Remove backdrop-filter from parent, apply to ::before */
+div.block-container { 
+    padding: 50px 40px !important; 
+    max-width: 480px !important; 
+    margin: 12vh auto 5vh auto !important; 
+    position: relative; 
+    z-index: 10;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+div.block-container::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-color: rgba(15, 15, 20, 0.75); 
+    backdrop-filter: blur(25px); 
+    -webkit-backdrop-filter: blur(25px); 
+    border: 1px solid rgba(255, 255, 255, 0.15); 
+    border-radius: 24px; 
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); 
+    z-index: -1;
+}
+
+@media (max-width: 768px) { 
+    div.block-container { 
+        max-width: 92% !important; 
+        margin: 18vh auto 5vh auto !important; 
+        padding: 30px 20px !important; 
+    } 
+}
+</style>"""
+        st.markdown(auth_css, unsafe_allow_html=True)
+        
+        if app_page == "policy":
+            st.markdown("<style>div.block-container { max-width: 800px !important; }</style>", unsafe_allow_html=True)
+
+        nav_html = """<div style="position: fixed; top: 0; left: 0; width: 100vw; padding: 20px 5%; display: flex; justify-content: space-between; align-items: center; z-index: 999999; background: rgba(0,0,0,0.5); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(255,255,255,0.1);">
+<a href="?page=landing" target="_self" style="font-size: 24px; font-weight: 800; color: white !important; text-decoration: none; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">voidememo</a>
+<div style="display: flex; gap: 20px; align-items: center;">
+<a href="?page=landing" target="_self" style="color: white !important; text-decoration: none; font-weight: 500; font-size: 15px; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">Home</a>
+<a href="?page=policy" target="_self" style="color: white !important; text-decoration: none; font-weight: 500; font-size: 15px; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">Policy</a>
+<a href="?page=auth&view=login" target="_self" style="background: #0a84ff; padding: 8px 20px; border-radius: 20px; font-weight: 700; color: white !important; text-decoration: none; box-shadow: 0 4px 10px rgba(10, 132, 255, 0.4);">Log In</a>
+</div>
+</div>"""
+        st.markdown(nav_html, unsafe_allow_html=True)
+
+        if app_page == "policy":
+            st.markdown("## voidememo Privacy Policy & Platform Architecture")
+            st.markdown("<p style='color: #aaa;'>Effective Date: April 2026</p><hr style='border-color: rgba(255,255,255,0.2);'>", unsafe_allow_html=True)
+            st.markdown("""
+            ### 1. Introduction and Core Philosophy
+            Welcome to voidememo, an advanced digital bibliotheca designed for the secure storage, organization, and sharing of personal media. Our core philosophy is built upon the premise of "Minimalist Security." This document explicitly outlines our data handling procedures, storage architecture, and the mechanics of user interactions.
+            
+            ### 2. Account Generation and Authentication Security
+            **Multi-Profile Architecture:** To accommodate distinct operational silos, voidememo allows a single verified email address to host up to 5 distinct user profiles. To prevent abuse, any profile created after the primary account requires mandatory phone number validation.
+            
+            **OTP-Based Access:** We have deprecated traditional static passwords in favor of dynamic Time-Based One-Time Passwords (OTP). When a login attempt is made, a secure 6-digit code is generated via cryptographically secure random number generators (CSPRNG) and dispatched to the registered email. This token carries a strict 10-minute Time-To-Live (TTL).
+            
+            ### 3. Database Architecture (MongoDB)
+            Your metadata—including folder hierarchies, file reference tags, pin sequencing, and notification ledgers—is structured within a NoSQL MongoDB Atlas cluster. Data transmitted between your client and our MongoDB instances is encrypted in transit using TLS 1.3 protocols.
+
+            ### 4. Media Hosting & Delivery (Cloudinary)
+            voidememo does not store physical image or video files on its application servers. We utilize the Cloudinary Enterprise API for optimized media asset management.
+            * **Uploads:** Media is uploaded via secure, signed POST requests. Files exceeding 50MB utilize chunked, multipart uploading.
+            * **Optimization:** Videos are automatically transcoded to highly efficient web formats (webm/mp4) and served via global Content Delivery Networks (CDNs).
+            * **Destruction:** When a user deletes a file, the application issues an irreversible `destroy` command to the API, wiping the asset from the global CDN nodes.
+
+            ### 5. Dynamic Stories & Reaction Mechanics
+            Our platform features a deterministic, time-seeded Story engine.
+            * **Aggregation:** The engine categorizes media into distinct arrays. Any media item tagged with a user reaction is monitored via a Unix timestamp. If the reaction occurred more than 7 days ago, it is aggregated into the "Previous week's favs ⭐" story ring.
+            * **24-Hour Lock Protocol:** To enforce intentional engagement, once a reaction is cast on a memory, the database locks that specific `_id` from further modification for exactly 86,400 seconds (24 hours). 
+
+            ### 6. Encrypted P2P Sharing Network
+            voidememo allows intra-network media sharing through a batch-processing engine.
+            * **Proximity Discovery:** Users can identify nearby peers by querying the `users` collection for matching `pin_code` variables. 
+            * **Share Ledger:** When a batch of media is shared, the files are not duplicated. Instead, a lightweight transaction document is created mapping an array of media Object IDs to the receiver. 
+
+            ### 7. AI Assistant Data Exposure
+            The integrated Vault Assistant is a constrained logic parser, not a generalized Large Language Model (LLM). It operates entirely locally within the application routing tree. No personal images or chat history are ever transmitted to third-party AI inference servers.
+            """)
+
+        elif auth_view == "login":
+            st.markdown('<div style="font-size: 32px; font-weight: 800; text-align: center; margin-bottom: 5px;">Welcome Back</div><div style="font-size: 15px; text-align: center; margin-bottom: 30px; color: #ccc;">Please enter your credentials to log in</div>', unsafe_allow_html=True)
             
             if st.session_state.login_step == 0:
                 email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="l_email")
                 pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="l_pwd")
                 is_human = st.checkbox("☑️ I am human (Not a robot)", key="l_human")
                 
-                forgot_html = f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="{get_nav_link("auth", "forgot")}" target="_self" class="muted-text" style="font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>'
-                st.markdown(forgot_html.replace('\n', ''), unsafe_allow_html=True)
+                st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="?page=auth&view=forgot" target="_self" style="color: #aaa; font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>', unsafe_allow_html=True)
                 
                 if st.button("Request OTP to Login", type="primary", use_container_width=True):
                     if not is_human:
@@ -970,8 +1006,7 @@ if not st.session_state.logged_in:
                         else:
                             st.error("Invalid credentials.")
                             
-                signup_html = f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">New to our platform?</span> <a href="{get_nav_link("auth", "signup")}" target="_self" class="native-link">Sign Up</a></div>'
-                st.markdown(signup_html.replace('\n', ''), unsafe_allow_html=True)
+                st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span style="color: #aaa;">New to our platform?</span> <a href="?page=auth&view=signup" target="_self" style="color: #0a84ff; text-decoration: none; font-weight: 600;">Sign Up</a></div>', unsafe_allow_html=True)
                 
             elif st.session_state.login_step == 1:
                 st.success(f"OTP sent to {html.escape(st.session_state.login_email)}")
@@ -999,7 +1034,7 @@ if not st.session_state.logged_in:
                     st.rerun()
 
         elif auth_view == "signup":
-            st.markdown('<div class="title-text">Sign Up</div><div class="sub-text">Create an account to build your vault.</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size: 32px; font-weight: 800; text-align: center; margin-bottom: 5px;">Sign Up</div><div style="font-size: 15px; text-align: center; margin-bottom: 30px; color: #ccc;">Create an account to build your vault.</div>', unsafe_allow_html=True)
             fname = st.text_input("First Name", placeholder="First Name", label_visibility="collapsed", key="s_fname")
             lname = st.text_input("Last Name", placeholder="Last Name", label_visibility="collapsed", key="s_lname")
             bday = st.date_input("Birthday", value=datetime.date(2000, 1, 1), min_value=datetime.date(1900, 1, 1), label_visibility="collapsed")
@@ -1025,13 +1060,12 @@ if not st.session_state.logged_in:
                         st.query_params["session"] = token; st.query_params["page"] = "app"; st.query_params["folder"] = "root"
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
-            login_html = f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Already have an account?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Sign In</a></div>'
-            st.markdown(login_html.replace('\n', ''), unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span style="color: #aaa;">Already have an account?</span> <a href="?page=auth&view=login" target="_self" style="color: #0a84ff; text-decoration: none; font-weight: 600;">Sign In</a></div>', unsafe_allow_html=True)
 
         elif auth_view == "forgot":
-            st.markdown('<div class="title-text">Forgot Password</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size: 32px; font-weight: 800; text-align: center; margin-bottom: 5px;">Forgot Password</div>', unsafe_allow_html=True)
             if st.session_state.reset_step == 0:
-                st.markdown('<div class="sub-text">Please enter your registered email</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size: 15px; text-align: center; margin-bottom: 30px; color: #ccc;">Please enter your registered email</div>', unsafe_allow_html=True)
                 f_email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="f_email")
                 if st.button("Reset Password", type="primary", use_container_width=True):
                     if f_email:
@@ -1046,7 +1080,7 @@ if not st.session_state.logged_in:
                                     st.session_state.reset_step = 1; st.session_state.reset_email = clean_email; st.rerun()
                         else: st.error("No account found with that email.")
             elif st.session_state.reset_step == 1:
-                st.markdown('<div class="sub-text">Enter the 6-digit code sent to your email</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size: 15px; text-align: center; margin-bottom: 30px; color: #ccc;">Enter the 6-digit code sent to your email</div>', unsafe_allow_html=True)
                 st.success(f"OTP sent to {html.escape(st.session_state.reset_email)}")
                 entered_otp = st.text_input("Enter 6-Digit OTP", placeholder="123456", label_visibility="collapsed", key="entered_otp")
                 new_pwd = st.text_input("Enter New Password", type="password", placeholder="New Password", label_visibility="collapsed", key="new_pwd")
@@ -1060,47 +1094,115 @@ if not st.session_state.logged_in:
                             st.session_state.reset_step = 0; st.session_state.reset_email = ""
                             st.query_params["view"] = "login"; st.rerun()
                         else: st.error("Invalid or expired token!")
-            login_html = f'<div style="text-align: center; margin-top: 25px;"><span class="muted-text">Remembered your password?</span> <a href="{get_nav_link("auth", "login")}" target="_self" class="native-link">Log In</a></div>'
-            st.markdown(login_html.replace('\n', ''), unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span style="color: #aaa;">Remembered your password?</span> <a href="?page=auth&view=login" target="_self" style="color: #0a84ff; text-decoration: none; font-weight: 600;">Log In</a></div>', unsafe_allow_html=True)
 
 # ================= DASHBOARD APP (LOGGED IN) =================
 else:
-    inject_global_css()
-    st.markdown("<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} .block-container { max-width: 100% !important; padding-top: 1rem !important; }</style>", unsafe_allow_html=True)
+    def inject_dashboard_css():
+        dash_css = """<style>
+:root { --bg-app: #f2f2f7; --bg-card: #ffffff; --bg-sidebar: #f2f2f7; --bg-input: #ffffff; --text-primary: #000000; --text-secondary: #8e8e93; --border: #d1d1d6; --accent: #007aff; --btn-hover: #e5e5ea; }
+@media (prefers-color-scheme: dark) { :root { --bg-app: #000000; --bg-card: #1c1c1e; --bg-sidebar: #000000; --bg-input: #1c1c1e; --text-primary: #ffffff; --text-secondary: #8e8e93; --border: #38383a; --accent: #0a84ff; --btn-hover: #2c2c2e; } }
+.stApp, [data-testid="stAppViewContainer"] { background-color: var(--bg-app) !important; color: var(--text-primary) !important; }
+p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
 
-    # 2 Min Background Auto-Refresh
-    components.html('<meta http-equiv="refresh" content="120">', height=0)
+/* Dashboard layout reset */
+div.block-container { 
+    max-width: 100% !important; 
+    padding: 20px 5% 80px 5% !important; 
+    margin: 0 auto !important; 
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+}
+div.block-container::before { display: none !important; content: none !important; }
 
-    # Intercept Full-Screen Dialogs
-    if "share_folder" in st.query_params: share_media_dialog(st.query_params["share_folder"], mode="folder")
-    if "ai_chat" in st.query_params: render_ai_chat_dialog()
-    if "profile_hub" in st.query_params: render_profile_hub_fullscreen()
-    if "preview_notif" in st.query_params: preview_shared_dialog(st.query_params["preview_notif"])
-    if "story_group" in st.query_params and "story_idx" in st.query_params: 
+.top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 9999999 !important; pointer-events: auto !important; margin-bottom: 20px; }
+.brand-logo { font-size: 24px; font-weight: 800; color: var(--accent) !important; letter-spacing: 0.5px; text-decoration: none; position:relative; z-index:100; }
+.dashboard-title { font-size: 32px; font-weight: 800; color: var(--text-primary); margin: 0; }
+.story-wrapper { display: flex; overflow-x: auto; gap: 15px; padding: 10px 0 20px 0; margin-bottom: 10px; }
+.story-wrapper::-webkit-scrollbar { display: none; }
+.story-link { text-decoration: none; display: inline-block; }
+.story-item { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 85px; cursor: pointer; transition: transform 0.2s; }
+.story-item:hover { transform: scale(1.05); }
+.story-ring { width: 76px; height: 76px; border-radius: 50%; padding: 3px; display: flex; align-items: center; justify-content: center; }
+.story-inner { width: 100%; height: 100%; border-radius: 50%; border: 3px solid var(--bg-app); overflow: hidden; background: var(--bg-card); display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.story-inner img, .story-inner video { width: 100%; height: 100%; object-fit: cover; }
+.story-label { font-size: 12px; font-weight: 600; color: var(--text-primary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80px;}
+.album-link { text-decoration: none; display: block; }
+.album-card { margin-bottom: 15px; transition: transform 0.2s ease; position: relative; }
+.album-card:hover { transform: scale(1.02); }
+.folder-card { position: relative; width: 100%; aspect-ratio: 1/1; border-radius: 12px; background-color: var(--bg-card); border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 8px; transition: transform 0.2s ease; }
+.folder-card:hover { transform: scale(1.02); }
+.media-container-wrapper { position: relative; margin-bottom: 15px; cursor: pointer; }
+.media-container-wrapper:hover .square-media { transform: scale(1.02); }
+.square-media { width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: var(--bg-card); border: 1px solid var(--border); }
+.square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
+[data-testid="column"] { position: relative; }
+.folder-options-btn [data-testid="stPopover"] > button { background-color: var(--bg-card) !important; color: var(--text-primary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; height: 38px !important; padding: 0 15px !important; font-weight: 600 !important; box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important; }
+.folder-options-btn [data-testid="stPopover"] > button:hover { background-color: var(--btn-hover) !important; }
+[data-testid="stFileUploader"] > div { background-color: var(--bg-card) !important; border: 1px dashed var(--border) !important; border-radius: 16px !important; padding: 20px !important; }
+.profile-header-widget { display: inline-flex; align-items: center; gap: 12px; background: transparent; padding: 6px 12px; border-radius: 50px; transition: transform 0.2s; cursor: pointer; color: var(--text-primary) !important; position: relative; text-decoration: none; }
+.profile-header-widget:hover { transform: scale(1.02); text-decoration: none; }
+.profile-header-widget img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+.profile-header-widget span { font-weight: 600; font-size: 15px;}
+.profile-notif-dot { position: absolute; top: 2px; right: 8px; width: 11px; height: 11px; background-color: #ff3b30; border-radius: 50%; border: 1.5px solid var(--bg-card); box-shadow: 0 0 5px rgba(255, 59, 48, 0.5); z-index: 20; }
+.custom-footer { margin-top: 50px; width: 100%; text-align: center; padding: 20px 0; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; clear: both; }
+@media (max-width: 768px) { .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; } .brand-logo { font-size: 28px; margin-bottom: 10px;} div.block-container { padding-top: 1rem !important; } }
+</style>"""
+        st.markdown(dash_css, unsafe_allow_html=True)
+
+    inject_dashboard_css()
+
+    # 5 Min Background Auto-Refresh
+    components.html('<meta http-equiv="refresh" content="300">', height=0)
+
+    # --- EXCLUSIVE DIALOG ROUTING (Mutex) ---
+    dialog_rendered = False
+
+    if "share_folder" in st.query_params and not dialog_rendered: 
+        render_share_media_overlay(st.query_params["share_folder"], mode="folder")
+        dialog_rendered = True
+    elif "ai_chat" in st.query_params and not dialog_rendered: 
+        render_ai_chat_overlay()
+        dialog_rendered = True
+    elif "profile_hub" in st.query_params and not dialog_rendered: 
+        render_profile_hub_overlay()
+        dialog_rendered = True
+    elif "preview_notif" in st.query_params and not dialog_rendered: 
+        render_preview_shared_overlay(st.query_params["preview_notif"])
+        dialog_rendered = True
+    elif "story_group" in st.query_params and "story_idx" in st.query_params and not dialog_rendered: 
         render_story_fullscreen(int(st.query_params["story_group"]), int(st.query_params["story_idx"]))
-    if "lightbox_idx" in st.query_params: 
+        dialog_rendered = True
+    elif "lightbox_idx" in st.query_params and not dialog_rendered: 
         render_lightbox_fullscreen(int(st.query_params["lightbox_idx"]), st.query_params.get("folder", "root"))
+        dialog_rendered = True
     
-    # Intercept action states
-    if st.session_state.get("pending_share"):
-        share_media_dialog(st.session_state.pending_share, mode="single")
+    # Action Integrations
+    if st.session_state.get("pending_share") and not dialog_rendered:
+        render_share_media_overlay(st.session_state.pending_share, mode="single")
         st.session_state.pending_share = None
+        dialog_rendered = True
 
-    if st.session_state.get("pending_delete"):
+    if st.session_state.get("pending_delete") and not dialog_rendered:
         try:
             file_to_del = files_col.find_one({"_id": ObjectId(st.session_state.pending_delete)})
             if file_to_del:
                 delete_file_dialog(file_to_del["_id"], file_to_del["public_id"], file_to_del["resource_type"])
         except Exception: pass
         st.session_state.pending_delete = None
+        dialog_rendered = True
         
-    if st.session_state.get("pending_move"):
+    if st.session_state.get("pending_move") and not dialog_rendered:
         move_media_dialog(st.session_state.pending_move)
+        st.session_state.pending_move = None
+        dialog_rendered = True
 
-    if st.session_state.get("pending_locked_react"):
+    if st.session_state.get("pending_locked_react") and not dialog_rendered:
         locked_reaction_dialog(st.session_state.pending_locked_react)
         st.session_state.pending_locked_react = None
+        dialog_rendered = True
 
     user_data = users_col.find_one({"username": st.session_state.username})
     root_folder = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
@@ -1179,7 +1281,7 @@ else:
         if is_root:
             c_title.markdown(f'<h2 style="margin:0;">{title_text}</h2>', unsafe_allow_html=True)
         else:
-            c_title.markdown(f'<h2 style="margin:0;">{title_text}</h2>', unsafe_allow_html=True)
+            c_title.markdown(f'<div style="display:flex; align-items:center; gap: 15px;"><a href="{home_link}" target="_self" style="text-decoration:none; font-weight: 600; color: var(--accent); font-size: 20px;">←</a><h2 style="margin:0;">{title_text}</h2></div>', unsafe_allow_html=True)
         
         with c_actions:
             if is_root:
@@ -1218,6 +1320,7 @@ else:
                                     if file.type not in allowed_types: continue
                                     r_type = "video" if file.type.startswith("video") else "image"
                                     try:
+                                        file.seek(0)
                                         res = cloudinary.uploader.upload_large(file, resource_type=r_type, chunk_size=20000000) if file.size > 50000000 else cloudinary.uploader.upload(file, resource_type=r_type)
                                         files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "tag": "", "tag_time": 0})
                                     except Exception as e: st.error(f"Failed to upload {html.escape(file.name)}.")
@@ -1244,7 +1347,7 @@ else:
                         html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
-        # Pure Circular Grid (No Checkboxes or 3-Dots. Action buttons exist ONLY in Lightbox)
+        # Pure Circular Grid (No Action Buttons in grid, only in Lightbox)
         if files:
             st.write("<br>", unsafe_allow_html=True)
             img_cols = st.columns(4)
@@ -1261,7 +1364,6 @@ else:
                     lb_url = f"?page=app&folder={safe_folder_id}&lightbox_idx={i}&session={session_token}"
                     safe_url = html.escape(file["url"])
                     
-                    # Target Self for Mobile Safety. Transparent layer to catch clicks on video
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
                         media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'

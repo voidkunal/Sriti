@@ -52,19 +52,7 @@ Emoji Reactions: Users can react to their files with custom emojis.
 
 24-Hour Cooldown: Once a reaction is set, it is locked for 24 hours to encourage thoughtful interaction. A countdown timer shows exactly when the lock will expire.
 
-🛠️ Tech Stack
-Component	Technology
-Language	Python 3.x
-Framework	Streamlit
-Database	MongoDB (PyMongo)
-Media Hosting	Cloudinary
-Visualization	Plotly
-Styling	CSS3 (Glassmorphism)
 
-
-# voidememo 🌐
-
-**The Private Digital Bibliotheca.**
 
 voidememo is a high-performance, secure cloud storage vault designed with the aesthetics of an admin dashboard and the engagement loop of modern social platforms. It prioritizes data privacy, multi-profile account isolation, and fluid user interaction without relying on traditional social feeds.
 
@@ -89,9 +77,3 @@ Built entirely in Python via Streamlit, utilizing MongoDB for metadata and Cloud
 | **Media Delivery Network** | Cloudinary API (Multipart chunking for >50MB files) |
 | **Security Protocol** | Certifi TLS 1.3, SHA-256 Hashing |
 
-## 🚀 Installation & Deployment
-
-### 1. Clone the Repository
-```bash
-git clone [https://github.com/yourusername/voidememo.git](https://github.com/yourusername/voidememo.git)
-cd voidememo
