@@ -57,12 +57,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# AI DATA PROTECTION MODEL CONFIGURATION
+# ADVANCED AI DATA PROTECTION ENGINE
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
     try:
-        model = tf.keras.models.load_model('nsfw_model.h5')
+        # compile=False prevents crashes from custom loss functions in downloaded models
+        model = tf.keras.models.load_model('nsfw_model.h5', compile=False)
         return model
     except Exception as e:
         print(f"Failed to load AI protection model: {e}")
@@ -72,36 +73,84 @@ safety_model = load_nsfw_model()
 
 def is_safe_content(file_bytes, model):
     if model is None:
-        return True # If model fails to load, allow upload to prevent breaking the app
+        return True # Fail-safe: Allow upload if model is missing
     
     try:
-        # Preprocess the image for the model
+        # Preprocess the image
         img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
-        img = img.resize((224, 224)) # Standard target size
-        img_array = np.array(img) / 255.0 # Normalize 0-1
-        img_array = np.expand_dims(img_array, axis=0)
         
-        # Run Inference
-        prediction = model.predict(img_array, verbose=0)
+        # 1. DYNAMIC SHAPE DETECTION
+        # Automatically adapt to the model's required input size
+        try:
+            input_layer = model.layers[0]
+            expected_shape = input_layer.input_shape
+            if isinstance(expected_shape, list): expected_shape = expected_shape[0]
+            target_size = (expected_shape[1], expected_shape[2]) if expected_shape[1] else (224, 224)
+        except:
+            target_size = (224, 224) # Fallback to standard
+            
+        img = img.resize(target_size)
+        img_array = np.array(img, dtype=np.float32)
         
-        # FIXED LOGIC: Stop false positives on normal skin/clothing (sarees, dresses, swimwear)
-        if prediction.shape[1] == 5:
-            # Standard 5-class model: [drawings, hentai, neutral, porn, sexy]
-            # We explicitly IGNORE the 'sexy' class (index 4) so normal photos don't get blurred.
-            # We ONLY flag true explicit 18+ content (hentai + porn)
-            explicit_score = prediction[0][1] + prediction[0][3]
-            return explicit_score <= 0.50 # If it's over 50% explicit porn, flag it.
-        elif prediction.shape[1] > 1:
-            # 2-class model: [safe, nsfw]
-            score = prediction[0][1] 
-            return score <= 0.85 # High threshold (85%) to prevent false positives
-        else:
-            # 1-class model
-            score = prediction[0][0]
-            return score <= 0.85
+        # 2. MULTI-NORMALIZATION INFERENCE (The Fix for "False Data")
+        # Generates arrays for the 3 major neural network mathematical formats
+        
+        # Format A: Standard RGB (0 to 1) -> Used by simple CNNs
+        arr_std = np.expand_dims(img_array / 255.0, axis=0)
+        
+        # Format B: MobileNet/Inception (-1 to 1) -> Used by modern Keras models
+        arr_mob = np.expand_dims((img_array / 127.5) - 1.0, axis=0)
+        
+        # Format C: VGG/ResNet (BGR Mean Subtraction) -> Used by Caffe/OpenCV ports
+        arr_vgg = img_array.copy()
+        arr_vgg = arr_vgg[..., ::-1] # RGB to BGR
+        arr_vgg[..., 0] -= 103.939
+        arr_vgg[..., 1] -= 116.779
+        arr_vgg[..., 2] -= 123.68
+        arr_vgg = np.expand_dims(arr_vgg, axis=0)
+        
+        # Run inference on all three formats
+        preds = [
+            model.predict(arr_std, verbose=0)[0],
+            model.predict(arr_mob, verbose=0)[0],
+            model.predict(arr_vgg, verbose=0)[0]
+        ]
+        
+        # 3. CONFIDENCE SELECTION
+        # Pick the mathematical result where the AI is most "certain"
+        best_pred = None
+        highest_confidence = -1
+        
+        for p in preds:
+            confidence = np.max(p) 
+            if confidence > highest_confidence:
+                highest_confidence = confidence
+                best_pred = p
+                
+        prediction = best_pred
+        is_nsfw = False
+        
+        # 4. STRICT EXPLICIT TARGETING LOGIC
+        if len(prediction) == 5:
+            # Standard 5-class model [drawings, hentai, neutral, porn, sexy]
+            porn_score = prediction[3]
+            hentai_score = prediction[1]
+            # Strict threshold focusing ONLY on explicit content, ignoring 'sexy' class
+            if (porn_score > 0.65) or (hentai_score > 0.65) or ((porn_score + hentai_score) > 0.75):
+                is_nsfw = True
+        elif len(prediction) >= 2:
+            # Binary Models [safe, unsafe]
+            if prediction[1] > 0.75:
+                is_nsfw = True
+        elif len(prediction) == 1:
+            if prediction[0] > 0.75:
+                is_nsfw = True
+                
+        return not is_nsfw
+
     except Exception as e:
-        print(f"Image processing error: {e}")
-        return True 
+        print(f"Advanced AI Processing Error: {e}")
+        return True # Do not break the app if the AI logic throws an internal error
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -629,7 +678,7 @@ def locked_reaction_dialog(remaining_seconds):
     st.info(f"Time remaining: **{hours} hours and {minutes} minutes**")
     if st.button("Got it", use_container_width=True): st.rerun()
 
-# --- NEW: FIND DUPLICATES DIALOG ---
+# --- DUPLICATE FINDER ALGORITHM ---
 @st.dialog("🔍 Find & Remove Duplicates")
 def find_duplicates_dialog(folder_id):
     st.write("This tool will scan the current album for exact duplicate images. It will keep one original and permanently delete the rest.")
@@ -639,7 +688,6 @@ def find_duplicates_dialog(folder_id):
             hashes = {}
             duplicates_to_delete = []
 
-            # Hash comparison to find exact matches
             for f in files_in_folder:
                 try:
                     response = requests.get(f["url"])
@@ -1623,7 +1671,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     if st.button("✏️ Rename Album", key=f"edit_{current['_id']}", use_container_width=True): rename_folder_dialog(current["_id"], current["folder_name"])
                     if st.button("🗑 Delete Album", key=f"del_fold_{current['_id']}", use_container_width=True): delete_folder_dialog(current["_id"], current["folder_name"])
                     
-                    # --- NEW: FIND DUPLICATES BUTTON ---
                     if st.button("🔍 Find & Remove Duplicates", key=f"dup_{current['_id']}", use_container_width=True): 
                         find_duplicates_dialog(current["_id"])
                         
@@ -1644,14 +1691,10 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                         folders_col.update_one({"_id": current["_id"]}, {"$set": {"is_locked": not is_locked}}); st.rerun()
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     
-                    # ----------------------------------------------------
-                    # UPDATED UPLOAD LOGIC: WARNING + FORCE OVERRIDE
-                    # ----------------------------------------------------
                     st.markdown("**Add Content**")
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
                         
-                        # Explicit Checkbox for 18+ content handling
                         force_upload = st.checkbox("Force upload sensitive content (Applies Blur automatically)")
                         
                         submit_button = st.form_submit_button("Sync Files", type="primary", use_container_width=True)
@@ -1673,7 +1716,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                                 st.warning(f"🚨 '{html.escape(file.name)}' contains 18+ content. Forced upload applied. Image will be blurred in the vault.")
                                                 is_flagged = True
                                             else:
-                                                # Block upload if they didn't check the force box
                                                 st.error(f"🚨 Blocked: '{html.escape(file.name)}' contains 18+ content. Check 'Force upload sensitive content' to bypass and blur.")
                                                 continue 
                                         
@@ -1684,7 +1726,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                         st.error(f"Failed to upload {html.escape(file.name)}.")
                                         
                             st.session_state.uploader_key += 1; st.rerun()
-                    # ----------------------------------------------------
                             
                 st.markdown('</div>', unsafe_allow_html=True)
         st.write("<br>", unsafe_allow_html=True)
@@ -1729,7 +1770,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
                         if is_flagged:
-                            # Blurred state in grid view
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20;">🙈</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
