@@ -84,11 +84,20 @@ def is_safe_content(file_bytes, model):
         # Run Inference
         prediction = model.predict(img_array, verbose=0)
         
-        # Determine score (handles both [safe, nsfw] and [nsfw] output structures)
-        score = prediction[0][1] if prediction.shape[1] > 1 else prediction[0][0]
+        # Handle different model output structures for robust NSFW detection
+        if prediction.shape[1] == 5:
+            # Common 5-class NSFW model: [drawings, hentai, neutral, porn, sexy]
+            # Summing the explicit/sensitive classes (indices 1, 3, 4)
+            score = prediction[0][1] + prediction[0][3] + prediction[0][4]
+        elif prediction.shape[1] > 1:
+            # 2-class model: [safe, nsfw]
+            score = prediction[0][1] 
+        else:
+            # 1-class model
+            score = prediction[0][0]
         
-        # Threshold: If score is > 0.6, it's flagged as NSFW (False = not safe)
-        return score <= 0.6 
+        # Stricter Threshold: Dropped from 0.6 to 0.35 to catch "sexy/suggestive" content
+        return score <= 0.35 
     except Exception as e:
         print(f"Image processing error: {e}")
         return True 
@@ -841,11 +850,12 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Scan all existing media uploaded before the AI Protection Model was activated.")
+            st.write("Scan all existing media to automatically apply blur protection based on the updated AI model rules.")
             if st.button("🔍 Scan Vault for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing old media. This may take a moment..."):
+                with st.spinner("Downloading and analyzing all media. This may take a moment..."):
                     updated_count = 0
-                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}):
+                    # Modfied to scan ALL images, not just unflagged ones, to retroactively apply the stricter AI rules
+                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
                         try:
                             resp = requests.get(f["url"], timeout=5)
                             if resp.status_code == 200:
@@ -853,7 +863,7 @@ def render_profile_hub_overlay():
                                 files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                                 updated_count += 1
                         except Exception: pass
-                    st.success(f"Scan complete! Analyzed {updated_count} legacy files.")
+                    st.success(f"Scan complete! Analyzed {updated_count} files and applied updated safety rules.")
 
         with c2:
             st.markdown("### Reaction Analytics")
