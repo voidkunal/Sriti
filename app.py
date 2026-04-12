@@ -19,6 +19,8 @@ import secrets
 import json
 import io
 import requests
+import os
+import urllib.request
 
 # ML Libraries for Data Protection Model
 import tensorflow as tf
@@ -47,8 +49,25 @@ st.markdown("""
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
+    model_path = 'custom_nsfw_model.h5'
+    
+    # --- GOOGLE DRIVE BYPASS ---
+    # Replace this with your actual Google Drive File ID
+    gdrive_file_id = "https://drive.google.com/file/d/1tNMbShHnVUBEjW-7O89SpeQMQzx2E5jw/view?usp=share_link" 
+    
+    # If file is missing OR is a fake GitHub LFS pointer file (< 1MB)
+    if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
+        print("Downloading real AI model from secure cloud storage...")
+        try:
+            download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
+            urllib.request.urlretrieve(download_url, model_path)
+            print("Download complete!")
+        except Exception as e:
+            print(f"Failed to download model: {e}")
+            return None
+
     try:
-        model = tf.keras.models.load_model('custom_nsfw_model.h5', compile=False)
+        model = tf.keras.models.load_model(model_path, compile=False)
         return model
     except Exception as e:
         print(f"Failed to load AI model: {e}")
@@ -58,30 +77,28 @@ safety_model = load_nsfw_model()
 
 def is_safe_content(file_bytes, model):
     if model is None:
-        # If the model is offline, return True so the app doesn't crash, 
-        # but the UI will show a massive red warning to the developer.
-        return True 
+        return True # Fail open so app doesn't crash, warning shown in UI
         
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         
-        # DYNAMIC SHAPE DETECTION: Asks your specific model what image size it expects
+        # DYNAMIC SHAPE DETECTION
         input_shape = model.input_shape
-        target_size = (224, 224) # Fallback
+        target_size = (224, 224) 
         if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
             target_size = (input_shape[1], input_shape[2])
             
         img_resized = pil_img.resize(target_size, Image.Resampling.BILINEAR)
         img_array = np.array(img_resized, dtype=np.float32)
         
-        # Normalize (Standard 0-1)
+        # Normalize 
         norm_array = np.expand_dims(img_array / 255.0, axis=0)
         
         prediction = model.predict(norm_array, verbose=0)[0]
         
         # AGGRESSIVE THRESHOLDS (50%+)
         if len(prediction) == 5:
-            # Classes: [drawings, hentai, neutral, porn, sexy]
+            # [drawings, hentai, neutral, porn, sexy]
             if prediction[1] >= 0.50 or prediction[3] >= 0.50 or prediction[4] >= 0.50:
                 return False
         elif len(prediction) >= 2:
@@ -92,7 +109,6 @@ def is_safe_content(file_bytes, model):
         return True 
     except Exception as e:
         print(f"AI Prediction Crash: {e}")
-        # If the prediction logic crashes, flag it as unsafe so you know it's broken!
         return False 
 
 # ==========================================
@@ -168,25 +184,18 @@ if api_req_key:
                 .left-arrow {{ left: 0px; }}
                 .right-arrow {{ right: 0px; }}
             </style>
-            
             <div class="carousel-wrapper" id="carouselWrapper">
                 <button class="slide-arrow left-arrow" onclick="slideLeft()">&#10094;</button>
-                <div class="carousel-track" id="carouselTrack">
-                    {media_html}
-                </div>
+                <div class="carousel-track" id="carouselTrack">{media_html}</div>
                 <button class="slide-arrow right-arrow" onclick="slideRight()">&#10095;</button>
             </div>
-            
             <script>
                 const track = document.getElementById("carouselTrack");
                 const scrollAmount = 270; 
                 function slideLeft() {{ track.scrollBy({{ left: -scrollAmount, behavior: 'smooth' }}); }}
                 function slideRight() {{ 
-                    if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{
-                        track.scrollTo({{ left: 0, behavior: 'smooth' }});
-                    }} else {{
-                        track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); 
-                    }}
+                    if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{ track.scrollTo({{ left: 0, behavior: 'smooth' }});
+                    }} else {{ track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); }}
                 }}
                 let autoSlide = setInterval(slideRight, 3500);
                 const wrapper = document.getElementById('carouselWrapper');
@@ -199,7 +208,6 @@ if api_req_key:
             st.markdown('<p style="color: white; text-align: center;">Gallery is empty.</p>', unsafe_allow_html=True)
     else:
         st.error("Access Denied. Invalid or disabled API Key.")
-        
     st.stop()
 
 
@@ -371,7 +379,7 @@ if st.session_state.logged_in:
         
         del st.query_params["action"]
         del st.query_params["file_id"]
-        # Keep lightbox open at the same index
+        # Maintains position in lightbox
         st.rerun()
 
     if "react" in st.query_params:
@@ -978,7 +986,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # DYNAMIC MENU: Includes restored permanent Safe/Sensitive overrides
+    # DYNAMIC MENU: Includes manual Safe/Sensitive overrides
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -1472,7 +1480,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     # VISUAL WARNING IF AI CRASHES / OFFLINE
     if safety_model is None:
-        st.error("🚨 AI MODEL OFFLINE: 'custom_nsfw_model.h5' could not be loaded. Ensure the exact file is uploaded via Git LFS to your GitHub repository and is not corrupted. The filter is currently bypassed.")
+        st.error("🚨 AI MODEL OFFLINE: 'custom_nsfw_model.h5' could not be loaded. Ensure the exact file is uploaded via Git LFS to your GitHub repository and is not corrupted, OR use the Google Drive ID bypass in the code. The filter is currently bypassed.")
     
     if is_root and st.session_state.story_groups:
         st.markdown(f'<h3 style="margin-left: 40px; margin-bottom: 10px;">Stories</h3>', unsafe_allow_html=True)
@@ -1568,6 +1576,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     file.seek(0)
                                     
                                     is_flagged = False
+                                    
                                     if r_type == "image":
                                         is_flagged = not is_safe_content(file_bytes, safety_model)
                                         if is_flagged:
