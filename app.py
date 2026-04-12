@@ -52,7 +52,7 @@ def load_nsfw_model():
     model_path = 'custom_nsfw_model.h5'
     
     # --- GOOGLE DRIVE BYPASS ---
-    gdrive_file_id = "1tNMbShHnVUBEjW-7O89SpeQMQzx2E5jw"
+    gdrive_file_id = "1tNMbShHnVUBEjW-7O89SpeQMQzx2E5jw" 
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
         print("Downloading real AI model from secure cloud storage...")
@@ -73,14 +73,13 @@ def load_nsfw_model():
 
 safety_model = load_nsfw_model()
 
-def is_safe_content(file_bytes, model):
+def is_safe_content(file_bytes, model, invert_logic=False):
     if model is None:
         return True 
         
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         
-        # DYNAMIC SHAPE DETECTION
         input_shape = model.input_shape
         target_size = (224, 224) 
         if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
@@ -89,25 +88,29 @@ def is_safe_content(file_bytes, model):
         img_resized = pil_img.resize(target_size, Image.Resampling.BILINEAR)
         img_array = np.array(img_resized, dtype=np.float32)
         
-        # FIXED NORMALIZATION: Maps pixels to [-1, 1] as expected by most custom .h5 models
-        norm_array = np.expand_dims((img_array / 127.5) - 1.0, axis=0)
+        # STANDARD NORMALIZATION (Restored for custom model compatibility)
+        norm_array = np.expand_dims(img_array / 255.0, axis=0)
         
         prediction = model.predict(norm_array, verbose=0)[0]
+        is_nsfw = False
         
-        # STRICT THRESHOLDS
         if len(prediction) == 5:
-            # Common 5-class output: [drawings, hentai, neutral, porn, sexy]
             nsfw_score = prediction[1] + prediction[3] + prediction[4]
-            if nsfw_score >= 0.40:  # Highly sensitive trigger
-                return False
+            if nsfw_score >= 0.50:  
+                is_nsfw = True
         elif len(prediction) >= 2:
-            # Binary output [Safe, NSFW]
-            if prediction[1] >= 0.40: return False
+            if prediction[1] >= 0.50: 
+                is_nsfw = True
         elif len(prediction) == 1:
-            # Single Sigmoid output
-            if prediction[0] >= 0.40: return False
+            if prediction[0] >= 0.50: 
+                is_nsfw = True
+                
+        # DYNAMIC LOGIC FLIP: Fixes the "Exact Opposite" bug if the custom model classes are reversed
+        if invert_logic:
+            is_nsfw = not is_nsfw
             
-        return True 
+        return not is_nsfw # Returns True if safe
+        
     except Exception as e:
         print(f"AI Prediction Crash: {e}")
         return False 
@@ -185,18 +188,25 @@ if api_req_key:
                 .left-arrow {{ left: 0px; }}
                 .right-arrow {{ right: 0px; }}
             </style>
+            
             <div class="carousel-wrapper" id="carouselWrapper">
                 <button class="slide-arrow left-arrow" onclick="slideLeft()">&#10094;</button>
-                <div class="carousel-track" id="carouselTrack">{media_html}</div>
+                <div class="carousel-track" id="carouselTrack">
+                    {media_html}
+                </div>
                 <button class="slide-arrow right-arrow" onclick="slideRight()">&#10095;</button>
             </div>
+            
             <script>
                 const track = document.getElementById("carouselTrack");
                 const scrollAmount = 270; 
                 function slideLeft() {{ track.scrollBy({{ left: -scrollAmount, behavior: 'smooth' }}); }}
                 function slideRight() {{ 
-                    if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{ track.scrollTo({{ left: 0, behavior: 'smooth' }});
-                    }} else {{ track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); }}
+                    if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{
+                        track.scrollTo({{ left: 0, behavior: 'smooth' }});
+                    }} else {{
+                        track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); 
+                    }}
                 }}
                 let autoSlide = setInterval(slideRight, 3500);
                 const wrapper = document.getElementById('carouselWrapper');
@@ -209,6 +219,7 @@ if api_req_key:
             st.markdown('<p style="color: white; text-align: center;">Gallery is empty.</p>', unsafe_allow_html=True)
     else:
         st.error("Access Denied. Invalid or disabled API Key.")
+        
     st.stop()
 
 
@@ -370,6 +381,7 @@ if st.session_state.logged_in:
                 elif action == "share":
                     st.session_state.pending_share = str(fid)
                 
+                # --- PERMANENT OVERRIDE CONTROLS ---
                 elif action == "unflag":
                     files_col.update_one({"_id": fid}, {"$set": {"is_flagged": False}})
                 elif action == "flag":
@@ -767,6 +779,7 @@ def render_profile_hub_overlay():
     st.markdown("<style>header {display: none;} .block-container {padding: 3rem 5% !important; max-width: 100vw;}</style>", unsafe_allow_html=True)
     
     user_data = users_col.find_one({"username": st.session_state.username})
+    invert_ai_current = user_data.get("invert_ai", False)
     
     c1, c2 = st.columns([10, 1])
     c1.markdown('<div class="dashboard-title" style="margin-bottom: 20px;">Profile Hub</div>', unsafe_allow_html=True)
@@ -809,13 +822,19 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Force a deep re-scan of ALL media using the core AI Protection rules.")
             
+            # NEW FIX: The toggle for inverted AI logic
+            invert_ai_new = st.checkbox("🔄 Invert AI Logic (Check this if normal photos are blurred and NSFW photos are clear)", value=invert_ai_current)
+            if invert_ai_new != invert_ai_current:
+                users_col.update_one({"username": st.session_state.username}, {"$set": {"invert_ai": invert_ai_new}})
+                st.success("AI Logic settings updated!")
+                time.sleep(1)
+                st.rerun()
+            
+            st.write("Force a deep re-scan of ALL media using the current AI Protection rules.")
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Analyzing all media with core trained AI..."):
+                with st.spinner("Analyzing all media with AI Engine..."):
                     updated_count = 0
-                    
-                    # Also checking video thumbnails during Deep Scan
                     for f in files_col.find({"username": st.session_state.username}):
                         try:
                             check_url = f["url"]
@@ -824,7 +843,7 @@ def render_profile_hub_overlay():
                                 
                             resp = requests.get(check_url, timeout=5)
                             if resp.status_code == 200:
-                                safe = is_safe_content(resp.content, safety_model)
+                                safe = is_safe_content(resp.content, safety_model, invert_logic=invert_ai_new)
                                 files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                                 updated_count += 1
                         except Exception: pass
@@ -983,7 +1002,6 @@ def render_lightbox_fullscreen(idx, folder_id_str):
 
     blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
     
-    # PERMANENT OVERRIDE BUTTON
     reveal_btn = f"<a href='{get_nav_link(page='app', folder=safe_folder_id, action='unflag', file_id=fid)}' target='_self' style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5); text-decoration:none;'>👁️ Reveal & Mark as Safe</a>" if is_flagged else ""
 
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
@@ -991,7 +1009,6 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # DYNAMIC MENU: Includes manual Safe/Sensitive overrides
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -1118,7 +1135,6 @@ if not st.session_state.logged_in:
         st.query_params["page"] = "landing"
         st.rerun()
 
-    # Z-index strictly 0, pointer events none.
     wallpaper_html = '''
     <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; overflow: hidden; background: #000; pointer-events: none;">
         <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
@@ -1447,17 +1463,17 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     unscanned_files = list(files_col.find({"username": st.session_state.username, "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
-        with st.spinner("🤖 Auto-scanning media with Pure AI Engine..."):
+        with st.spinner("🤖 Auto-scanning media with AI Engine..."):
             for f in unscanned_files:
                 try:
                     check_url = f["url"]
-                    # VIDEO FIX: Fetch the JPG thumbnail generated by Cloudinary instead of the mp4
                     if f["resource_type"] == "video":
                         check_url = check_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                         
                     resp = requests.get(check_url, timeout=5)
                     if resp.status_code == 200:
-                        safe = is_safe_content(resp.content, safety_model)
+                        invert_ai_flag = user_data.get("invert_ai", False)
+                        safe = is_safe_content(resp.content, safety_model, invert_logic=invert_ai_flag)
                         files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                 except: pass
             st.rerun()
@@ -1488,9 +1504,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     st.markdown(header_html.replace('\n', ''), unsafe_allow_html=True)
     st.write("<br>", unsafe_allow_html=True) 
 
-    # VISUAL WARNING IF AI CRASHES / OFFLINE
     if safety_model is None:
-        st.error("🚨 AI MODEL OFFLINE: 'custom_nsfw_model.h5' could not be loaded. Ensure the exact file is uploaded via Git LFS to your GitHub repository and is not corrupted, OR use the Google Drive ID bypass in the code. The filter is currently bypassed.")
+        st.error("🚨 AI MODEL OFFLINE: 'custom_nsfw_model.h5' could not be loaded. Ensure the exact file is uploaded via Git LFS to your GitHub repository and is not corrupted. The filter is currently bypassed.")
     
     if is_root and st.session_state.story_groups:
         st.markdown(f'<h3 style="margin-left: 40px; margin-bottom: 10px;">Stories</h3>', unsafe_allow_html=True)
@@ -1586,21 +1601,21 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     file.seek(0)
                                     
                                     is_flagged = False
+                                    invert_ai_flag = user_data.get("invert_ai", False)
                                     
                                     if r_type == "image":
-                                        is_flagged = not is_safe_content(file_bytes, safety_model)
+                                        is_flagged = not is_safe_content(file_bytes, safety_model, invert_logic=invert_ai_flag)
                                         if is_flagged:
                                             st.warning(f"⚠️ '{html.escape(file.name)}' was flagged by AI as sensitive. It has been synced and blurred.")
                                         
                                     try:
                                         res = cloudinary.uploader.upload_large(file, resource_type=r_type, chunk_size=20000000) if file.size > 50000000 else cloudinary.uploader.upload(file, resource_type=r_type)
                                         
-                                        # VIDEO FIX: Scan the Cloudinary generated thumbnail immediately after upload
                                         if r_type == "video":
                                             thumb_url = res["secure_url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                                             thumb_resp = requests.get(thumb_url, timeout=5)
                                             if thumb_resp.status_code == 200:
-                                                is_flagged = not is_safe_content(thumb_resp.content, safety_model)
+                                                is_flagged = not is_safe_content(thumb_resp.content, safety_model, invert_logic=invert_ai_flag)
                                                 if is_flagged:
                                                     st.warning(f"⚠️ Video '{html.escape(file.name)}' was flagged by AI as sensitive. It has been synced and blurred.")
 
@@ -1656,7 +1671,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
                     else:
                         if is_flagged:
-                            # Blurred state for videos
                             vid_thumb_preview = safe_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{vid_thumb_preview}" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
                         else:
