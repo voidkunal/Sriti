@@ -62,7 +62,8 @@ st.markdown("""
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
     try:
-        model = tf.keras.models.load_model('nsfw_model.h5', compile=False)
+        # Updated to load the custom model you uploaded
+        model = tf.keras.models.load_model('custom_nsfw_model.h5', compile=False)
         return model
     except Exception as e:
         print(f"Failed to load AI protection model: {e}")
@@ -85,22 +86,21 @@ def is_safe_content(file_bytes, model):
                 norm_array = np.expand_dims(img_array / 255.0, axis=0)
                 prediction = model.predict(norm_array, verbose=0)[0]
                 
+                # FIXED: Raised confidence threshold from 0.15 (15%) to 0.75 (75%) to stop false positives
                 if len(prediction) == 5:
                     # [drawings, hentai, neutral, porn, sexy]
-                    if prediction[1] >= 0.15 or prediction[3] >= 0.15 or prediction[4] >= 0.15:
+                    if prediction[1] >= 0.75 or prediction[3] >= 0.75 or prediction[4] >= 0.75:
                         is_nsfw = True
                 elif len(prediction) >= 2:
-                    if prediction[1] >= 0.15:
+                    if prediction[1] >= 0.75:
                         is_nsfw = True
                 elif len(prediction) == 1:
-                    if prediction[0] >= 0.15:
+                    if prediction[0] >= 0.75:
                         is_nsfw = True
             except:
                 pass # If CNN fails, fallback to Pipeline 2 silently
                 
         # --- PIPELINE 2: MATHEMATICAL PIXEL HEURISTIC (Skin Detection) ---
-        # If the Deep Learning model is biased and missed it, this aggressive scanner catches it.
-        # It calculates the exact percentage of exposed human skin in the image.
         if not is_nsfw:
             r = img_array[:, :, 0]
             g = img_array[:, :, 1]
@@ -109,7 +109,6 @@ def is_safe_content(file_bytes, model):
             max_rgb = np.maximum(r, np.maximum(g, b))
             min_rgb = np.minimum(r, np.minimum(g, b))
             
-            # Standard bounds for skin tones under varied lighting
             rule1 = (r > 95) & (g > 40) & (b > 20)
             rule2 = (max_rgb - min_rgb) > 15
             rule3 = np.abs(r - g) > 15
@@ -118,9 +117,8 @@ def is_safe_content(file_bytes, model):
             skin_mask = rule1 & rule2 & rule3 & rule4
             skin_percentage = np.sum(skin_mask) / (224 * 224)
             
-            # If more than 22% of the image is exposed skin, flag it as suggestive.
-            # This aggressively targets swimwear, lingerie, and close-up body shots.
-            if skin_percentage > 0.22:
+            # FIXED: Raised skin pixel threshold from 22% to 45% so portraits don't get blurred
+            if skin_percentage > 0.45:
                 is_nsfw = True
 
         return not is_nsfw
@@ -1208,18 +1206,26 @@ if not st.session_state.logged_in:
         st.rerun()
 
     # Generate Universal Live Wallpaper
-    wallpaper_html = '<div class="live-wallpaper-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; z-index: -1; background: #000; pointer-events: none;"><div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">'
+    # FIXED: Re-structured this overlay to force it to show up on top of any Streamlit default background, but behind the text.
+    wallpaper_html = '''
+    <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 998; overflow: hidden; background: #000;">
+        <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
+    '''
     for i in range(60):
-        wallpaper_html += f'<img src="https://picsum.photos/seed/{i+9000}/400/600" class="live-wallpaper-img" style="width: 12vw; height: 18vw; object-fit: cover; border-radius: 12px; opacity: 0.35;" loading="lazy">'
-    wallpaper_html += '</div></div><style>@keyframes scroll-wallpaper { 0% { transform: rotate(-15deg) translateY(0); } 100% { transform: rotate(-15deg) translateY(-50%); } }</style>'
-    st.markdown(wallpaper_html, unsafe_allow_html=True)
+        wallpaper_html += f'<img src="https://picsum.photos/seed/{i+9000}/400/600" style="width: 12vw; height: 18vw; object-fit: cover; border-radius: 12px; opacity: 0.35;" loading="lazy">'
+    wallpaper_html += '''
+        </div>
+    </div>
+    <style>@keyframes scroll-wallpaper { 0% { transform: rotate(-15deg) translateY(0); } 100% { transform: rotate(-15deg) translateY(-50%); } }</style>
+    '''
 
     if app_page == "landing":
-        landing_html = """<style>
+        # Adjusted z-index and structure to stack over the wallpaper overlay smoothly
+        landing_html = wallpaper_html + """<style>
 div[data-testid="stAppViewBlockContainer"] { background: transparent !important; padding: 0 !important; margin: 0 !important; max-width: 100vw !important; border: none !important; box-shadow: none !important; }
 div[data-testid="stAppViewBlockContainer"]::before { display: none !important; }
 </style>
-<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999; display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle, rgba(0,0,0,0.1) 0%, rgba(0,0,0,0.85) 100%);">
+<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999; display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.95) 100%);">
 <div style="position: absolute; top: 0; left: 0; width: 100%; padding: 20px 5%; display: flex; justify-content: space-between; align-items: center;">
 <a href="?page=landing" target="_self" style="font-size: 24px; font-weight: 800; color: white; text-decoration: none; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">voidememo</a>
 <div style="display: flex; gap: 20px; align-items: center;">
@@ -1238,7 +1244,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; }
         st.markdown(landing_html, unsafe_allow_html=True)
         
     else:
-        # Glassmorphism applied natively to Streamlit for Auth/Policy pages
+        st.markdown(wallpaper_html, unsafe_allow_html=True) # Inject fixed wallpaper behind auth pages too
+
         auth_css = """<style>
 .stApp, .main, [data-testid="stAppViewContainer"] { background: transparent !important; }
 p, h1, h2, h3, h4, h5, h6, span, label, li { color: #ffffff !important; }
@@ -1254,7 +1261,7 @@ div[data-testid="stAppViewBlockContainer"] {
     max-width: 480px !important; 
     margin: 12vh auto 5vh auto !important; 
     position: relative; 
-    z-index: 10;
+    z-index: 999;
     background-color: transparent !important;
     border: none !important;
     box-shadow: none !important;
