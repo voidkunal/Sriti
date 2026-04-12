@@ -108,39 +108,36 @@ def is_safe_content(file_bytes, model):
             model.predict(arr_vgg, verbose=0)[0]
         ]
         
-        best_pred = None
-        highest_confidence = -1
-        
-        for p in preds:
-            confidence = np.max(p) 
-            if confidence > highest_confidence:
-                highest_confidence = confidence
-                best_pred = p
-                
-        prediction = best_pred
+        # 3. PARANOID TARGETING LOGIC
+        # Instead of taking the highest overall confidence (which hides the NSFW score),
+        # we check EVERY prediction format. If ANY of them trigger the threshold, we flag it.
         is_nsfw = False
         
-        # 3. HYPER-STRICT TARGETING LOGIC
-        if len(prediction) == 5:
-            # Standard output format: [drawings, hentai, neutral, porn, sexy]
-            hentai_score = prediction[1]
-            porn_score = prediction[3]
-            sexy_score = prediction[4] # Catches swimwear, lingerie, and short dresses
-            
-            # Dropped threshold to a hair-trigger 15%. If it detects even a fraction of suggestiveness, FLAG IT.
-            if porn_score > 0.20 or hentai_score > 0.20 or sexy_score > 0.15:
-                is_nsfw = True
-            # Combined threshold safeguard
-            elif (porn_score + hentai_score + sexy_score) > 0.25:
-                is_nsfw = True
+        for prediction in preds:
+            if len(prediction) == 5:
+                # [drawings, hentai, neutral, porn, sexy]
+                hentai_score = prediction[1]
+                porn_score = prediction[3]
+                sexy_score = prediction[4] # Catches swimwear, lingerie, short dresses, deep necks
                 
-        elif len(prediction) >= 2:
-            # Binary Models [safe, unsafe] -> Strict 20% threshold
-            if prediction[1] > 0.20:
-                is_nsfw = True
-        elif len(prediction) == 1:
-            if prediction[0] > 0.20:
-                is_nsfw = True
+                # HYPER-SENSITIVE THRESHOLD: 8% 
+                # If ANY format detects even an 8% chance of suggestiveness/explicit content, drop the hammer.
+                if porn_score > 0.08 or hentai_score > 0.08 or sexy_score > 0.08:
+                    is_nsfw = True
+                    break
+                elif (porn_score + hentai_score + sexy_score) > 0.12:
+                    is_nsfw = True
+                    break
+                    
+            elif len(prediction) >= 2:
+                # Binary Models [safe, unsafe] -> Strict 10% threshold
+                if prediction[1] > 0.10:
+                    is_nsfw = True
+                    break
+            elif len(prediction) == 1:
+                if prediction[0] > 0.10:
+                    is_nsfw = True
+                    break
                 
         return not is_nsfw
 
@@ -1707,6 +1704,9 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     
                     st.markdown("**Add Content**")
+                    # ----------------------------------------------------
+                    # UPLOAD SCANNING LOGIC
+                    # ----------------------------------------------------
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
                         
@@ -1725,13 +1725,14 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     
                                     is_flagged = False
                                     
+                                    # Scans image directly during upload process
                                     if r_type == "image":
                                         if not is_safe_content(file_bytes, safety_model):
                                             if force_upload:
-                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged as Suggestive/18+. Forced upload applied. Blurring in vault.")
+                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged as 18+/Suggestive. Forced upload applied. Blurring in vault.")
                                                 is_flagged = True
                                             else:
-                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged as Suggestive/18+. Check 'Force upload' to bypass and blur.")
+                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged as 18+/Suggestive. Check 'Force upload' to bypass and blur.")
                                                 continue 
                                         
                                     try:
