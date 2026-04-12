@@ -57,7 +57,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# ADVANCED AI DATA PROTECTION ENGINE
+# ADVANCED STRICT AI DATA PROTECTION ENGINE
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
@@ -120,19 +120,23 @@ def is_safe_content(file_bytes, model):
         prediction = best_pred
         is_nsfw = False
         
-        # 3. AGGRESSIVE TARGETING LOGIC (Catching 18+ and Suggestive)
+        # 3. STRICT EXPLICIT & SUGGESTIVE TARGETING LOGIC
         if len(prediction) == 5:
-            # [drawings, hentai, neutral, porn, sexy]
+            # Standard output format: [drawings, hentai, neutral, porn, sexy]
             hentai_score = prediction[1]
             porn_score = prediction[3]
-            sexy_score = prediction[4]
+            sexy_score = prediction[4] # Catches swimwear, lingerie, and short dresses
             
-            # Aggressive threshold: Combines all explicit/suggestive classes
-            explicit_score = hentai_score + porn_score + sexy_score
-            if explicit_score > 0.40:  # If it's more than 40% suggestive/explicit, FLAG IT.
+            # If the AI thinks it is even 40% likely to be swimwear/suggestive, FLAG IT.
+            # If it thinks it is explicit (porn/hentai) over 30%, FLAG IT.
+            if porn_score > 0.30 or hentai_score > 0.30 or sexy_score > 0.40:
+                is_nsfw = True
+            # Combined threshold safeguard
+            elif (porn_score + hentai_score + sexy_score) > 0.45:
                 is_nsfw = True
                 
         elif len(prediction) >= 2:
+            # Binary Models [safe, unsafe] -> Strict 40% threshold
             if prediction[1] > 0.40:
                 is_nsfw = True
         elif len(prediction) == 1:
@@ -929,11 +933,14 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Scan all existing media uploaded before the AI Protection Model was activated.")
-            if st.button("🔍 Scan Vault for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing old media. This may take a moment..."):
+            st.write("Force a deep re-scan of ALL media to apply the latest AI Protection Model rules.")
+            
+            if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
+                with st.spinner("Downloading and analyzing ALL media. This may take a moment..."):
                     updated_count = 0
-                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}):
+                    
+                    # Force scan every single image in the user's account
+                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
                         try:
                             resp = requests.get(f["url"], timeout=5)
                             if resp.status_code == 200:
@@ -941,7 +948,8 @@ def render_profile_hub_overlay():
                                 files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                                 updated_count += 1
                         except Exception: pass
-                    st.success(f"Scan complete! Analyzed {updated_count} legacy files.")
+                        
+                    st.success(f"Deep scan complete! Re-evaluated {updated_count} files with the most advanced rules.")
 
         with c2:
             st.markdown("### Reaction Analytics")
@@ -1575,7 +1583,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     current = folders_col.find_one({"_id": actual_folder_id})
     is_root = current is None or current.get("parent_id") is None
 
-    # --- NEW: AUTO-SCANNER ON BOOT ---
+    # --- AUTO-SCANNER ON BOOT ---
     # Automatically triggers when the user loads the dashboard and finds unscanned files
     unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}))
     if unscanned_files:
@@ -1700,10 +1708,13 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     
                     st.markdown("**Add Content**")
+                    # ----------------------------------------------------
+                    # UPLOAD SCANNING LOGIC
+                    # ----------------------------------------------------
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
                         
-                        force_upload = st.checkbox("Force upload sensitive content (Applies Blur automatically)")
+                        force_upload = st.checkbox("Force upload flagged content (Applies Blur automatically)")
                         
                         submit_button = st.form_submit_button("Sync Files", type="primary", use_container_width=True)
                         if submit_button and uploaded_files:
@@ -1718,13 +1729,14 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     
                                     is_flagged = False
                                     
+                                    # Scans image directly during upload process
                                     if r_type == "image":
                                         if not is_safe_content(file_bytes, safety_model):
                                             if force_upload:
-                                                st.warning(f"🚨 '{html.escape(file.name)}' contains sensitive content. Forced upload applied. Image will be blurred in the vault.")
+                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged as 18+/Suggestive. Forced upload applied. Blurring in vault.")
                                                 is_flagged = True
                                             else:
-                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' contains sensitive content. Check 'Force upload sensitive content' to bypass and blur.")
+                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged as 18+/Suggestive. Check 'Force upload' to bypass and blur.")
                                                 continue 
                                         
                                     try:
