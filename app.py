@@ -76,74 +76,48 @@ def is_safe_content(file_bytes, model):
         return True # Fail-safe: Allow upload if model is missing
     
     try:
-        # Preprocess the image
+        # 1. Standardized Preprocessing (Matches 99% of Keras NSFW models)
         img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
+        img = img.resize((224, 224), Image.Resampling.BILINEAR)
         
-        # 1. DYNAMIC SHAPE DETECTION
-        try:
-            input_layer = model.layers[0]
-            expected_shape = input_layer.input_shape
-            if isinstance(expected_shape, list): expected_shape = expected_shape[0]
-            target_size = (expected_shape[1], expected_shape[2]) if expected_shape[1] else (224, 224)
-        except:
-            target_size = (224, 224) # Fallback to standard
-            
-        img = img.resize(target_size)
-        img_array = np.array(img, dtype=np.float32)
+        # Normalize to [0, 1] range
+        img_array = np.array(img, dtype=np.float32) / 255.0
+        img_array = np.expand_dims(img_array, axis=0)
         
-        # 2. MULTI-NORMALIZATION INFERENCE
-        arr_std = np.expand_dims(img_array / 255.0, axis=0)
-        arr_mob = np.expand_dims((img_array / 127.5) - 1.0, axis=0)
+        # 2. Run Inference
+        prediction = model.predict(img_array, verbose=0)[0]
         
-        arr_vgg = img_array.copy()
-        arr_vgg = arr_vgg[..., ::-1] # RGB to BGR
-        arr_vgg[..., 0] -= 103.939
-        arr_vgg[..., 1] -= 116.779
-        arr_vgg[..., 2] -= 123.68
-        arr_vgg = np.expand_dims(arr_vgg, axis=0)
-        
-        preds = [
-            model.predict(arr_std, verbose=0)[0],
-            model.predict(arr_mob, verbose=0)[0],
-            model.predict(arr_vgg, verbose=0)[0]
-        ]
-        
-        # 3. PARANOID TARGETING LOGIC
-        # Instead of taking the highest overall confidence (which hides the NSFW score),
-        # we check EVERY prediction format. If ANY of them trigger the threshold, we flag it.
+        # 3. Aggressive Targeting Logic for 18+ and Suggestive Content
         is_nsfw = False
         
-        for prediction in preds:
-            if len(prediction) == 5:
-                # [drawings, hentai, neutral, porn, sexy]
-                hentai_score = prediction[1]
-                porn_score = prediction[3]
-                sexy_score = prediction[4] # Catches swimwear, lingerie, short dresses, deep necks
+        if len(prediction) == 5:
+            # Expected format: [drawings, hentai, neutral, porn, sexy]
+            hentai_score = prediction[1]
+            porn_score = prediction[3]
+            sexy_score = prediction[4] # Catches swimwear, lingerie, short dresses
+            
+            # HYPER-STRICT THRESHOLD: 15% (0.15)
+            # If the AI detects even a 15% probability of suggestive/explicit material, flag it.
+            if porn_score >= 0.15 or hentai_score >= 0.15 or sexy_score >= 0.15:
+                is_nsfw = True
+            elif (porn_score + hentai_score + sexy_score) >= 0.20:
+                is_nsfw = True
                 
-                # HYPER-SENSITIVE THRESHOLD: 8% 
-                # If ANY format detects even an 8% chance of suggestiveness/explicit content, drop the hammer.
-                if porn_score > 0.08 or hentai_score > 0.08 or sexy_score > 0.08:
-                    is_nsfw = True
-                    break
-                elif (porn_score + hentai_score + sexy_score) > 0.12:
-                    is_nsfw = True
-                    break
-                    
-            elif len(prediction) >= 2:
-                # Binary Models [safe, unsafe] -> Strict 10% threshold
-                if prediction[1] > 0.10:
-                    is_nsfw = True
-                    break
-            elif len(prediction) == 1:
-                if prediction[0] > 0.10:
-                    is_nsfw = True
-                    break
+        elif len(prediction) >= 2:
+            # Binary Format: [safe, nsfw]
+            if prediction[1] >= 0.15:
+                is_nsfw = True
+                
+        elif len(prediction) == 1:
+            # Single node probability
+            if prediction[0] >= 0.15:
+                is_nsfw = True
                 
         return not is_nsfw
 
     except Exception as e:
-        print(f"Advanced AI Processing Error: {e}")
-        return True 
+        print(f"AI Processing Error: {e}")
+        return True # Do not crash the upload if the image file is corrupted
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -1581,7 +1555,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     # --- AUTO-SCANNER ON BOOT ---
     # Automatically triggers when the user loads the dashboard and finds unscanned files
-    unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}))
+    unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
         with st.spinner("🤖 Auto-scanning new or unchecked media for safety..."):
             for f in unscanned_files:
@@ -1729,10 +1703,10 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     if r_type == "image":
                                         if not is_safe_content(file_bytes, safety_model):
                                             if force_upload:
-                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged as 18+/Suggestive. Forced upload applied. Blurring in vault.")
+                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged as Suggestive/18+. Forced upload applied. Blurring in vault.")
                                                 is_flagged = True
                                             else:
-                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged as 18+/Suggestive. Check 'Force upload' to bypass and blur.")
+                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged as Suggestive/18+. Check 'Force upload' to bypass and blur.")
                                                 continue 
                                         
                                     try:
