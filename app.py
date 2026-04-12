@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import streamlit.components.v1 as components
 from pymongo import MongoClient
@@ -57,51 +58,39 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# CUSTOM AI PROTECTION ENGINE (MobileNetV2)
+# CUSTOM HUGGING FACE AI PROTECTION ENGINE
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_custom_model():
+    if not os.path.exists('custom_nsfw_model.h5'):
+        return "MISSING"
     try:
-        # Load YOUR locally trained custom model
         model = tf.keras.models.load_model('custom_nsfw_model.h5', compile=False)
         return model
     except Exception as e:
-        print(f"Failed to load custom AI model: {e}")
-        return None
+        return f"ERROR: {str(e)}"
 
 safety_model = load_custom_model()
 
-def is_safe_content(file_bytes, model):
-    if model is None:
-        return True # Fail-safe: Allow upload if model is missing
+def get_ai_score(file_bytes, model):
+    if model is None or isinstance(model, str):
+        return None 
     
     try:
-        # 1. Standardize image exactly how it was trained in your Colab script
+        # Standardize image exactly how it was trained
         img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         img = img.resize((224, 224), Image.Resampling.BILINEAR)
         
-        # Normalize strictly to [0, 1]
         img_array = np.array(img, dtype=np.float32) / 255.0
         img_array = np.expand_dims(img_array, axis=0)
         
-        # 2. Run Inference through your custom weights
+        # Returns the raw mathematical probabilities [Class 0, Class 1]
         prediction = model.predict(img_array, verbose=0)[0]
-        
-        # 3. Strict Classification Logic
-        # Assuming alphabetical mapping: 0 = 'nsfw', 1 = 'safe'
-        # (If it blurs the wrong things, change this to prediction[1])
-        nsfw_score = prediction[0] 
-        
-        # HYPER-STRICT THRESHOLD: 15% (0.15)
-        # If your AI detects even a 15% match to the NSFW data you trained it on, FLAG IT.
-        if nsfw_score >= 0.15:
-            return False # False = Not Safe (Triggers Blur)
-            
-        return True # True = Safe
+        return prediction
 
     except Exception as e:
         print(f"Custom AI Processing Error: {e}")
-        return True
+        return None
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -329,7 +318,8 @@ defaults = {
     "logged_in": False, "username": "", "reset_step": 0, "reset_email": "",
     "uploader_key": 0, "folder_key": 0, "story_groups": [], "pending_share": None,
     "pending_delete": None, "pending_locked_react": None, "pending_move": None,
-    "login_step": 0, "login_email": ""
+    "login_step": 0, "login_email": "",
+    "ai_target_class": 0, "ai_threshold": 0.15 # Default Calibration Settings
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -886,24 +876,44 @@ def render_profile_hub_overlay():
                     st.success("Profile Updated!"); time.sleep(1); st.rerun()
             
             st.markdown("<hr>", unsafe_allow_html=True)
+            
+            # --- NEW: AI ENGINE CALIBRATION PANEL ---
+            st.markdown("### 🧠 AI Engine Calibration")
+            st.write("If the AI is blurring the wrong images, adjust these settings. Upload a test image to see its exact scores!")
+            
+            col_a, col_b = st.columns(2)
+            target_class = col_a.radio("Which Class is NSFW?", ["Class 0", "Class 1"], index=st.session_state.ai_target_class)
+            threshold = col_b.slider("Strictness Threshold (%)", 1, 100, int(st.session_state.ai_threshold * 100))
+            
+            if st.button("💾 Save AI Calibration", use_container_width=True):
+                st.session_state.ai_target_class = 0 if target_class == "Class 0" else 1
+                st.session_state.ai_threshold = threshold / 100.0
+                st.success("Calibration Saved! Now run the Deep Scan below.")
+            
+            st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Force a deep re-scan of ALL media to apply the latest Custom AI Protection rules.")
+            st.write("Force a deep re-scan of ALL media to apply your updated AI calibration.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing ALL media using Custom AI..."):
-                    updated_count = 0
-                    
-                    # Force scan every single image in the user's account
-                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
-                        try:
-                            resp = requests.get(f["url"], timeout=5)
-                            if resp.status_code == 200:
-                                safe = is_safe_content(resp.content, safety_model)
-                                files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
-                                updated_count += 1
-                        except Exception: pass
-                        
-                    st.success(f"Deep scan complete! Re-evaluated {updated_count} files.")
+                if isinstance(safety_model, str):
+                    st.error(f"Cannot scan: AI Model Offline ({safety_model})")
+                else:
+                    with st.spinner("Downloading and analyzing ALL media using Custom AI..."):
+                        updated_count = 0
+                        for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
+                            try:
+                                resp = requests.get(f["url"], timeout=5)
+                                if resp.status_code == 200:
+                                    pred = get_ai_score(resp.content, safety_model)
+                                    if pred is not None:
+                                        # Uses your UI-calibrated settings to decide what gets blurred
+                                        nsfw_score = pred[st.session_state.ai_target_class]
+                                        is_flagged = bool(nsfw_score >= st.session_state.ai_threshold)
+                                        files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": is_flagged}})
+                                        updated_count += 1
+                            except Exception: pass
+                            
+                        st.success(f"Deep scan complete! Re-evaluated {updated_count} files.")
 
         with c2:
             st.markdown("### Reaction Analytics")
@@ -1482,6 +1492,19 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     inject_dashboard_css()
 
+    # --- DEFAULT AI CALIBRATION SETTINGS ---
+    defaults = {
+        "logged_in": False, "username": "", "reset_step": 0, "reset_email": "",
+        "uploader_key": 0, "folder_key": 0, "story_groups": [], "pending_share": None,
+        "pending_delete": None, "pending_locked_react": None, "pending_move": None,
+        "login_step": 0, "login_email": "",
+        "ai_target_class": 0,  # 0 usually maps to 'nsfw', 1 to 'safe'
+        "ai_threshold": 0.15   # Super aggressive 15% threshold
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
     # --- EXCLUSIVE DIALOG ROUTING (Mutex) ---
     dialog_rendered = False
 
@@ -1538,18 +1561,21 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     is_root = current is None or current.get("parent_id") is None
 
     # --- AUTO-SCANNER ON BOOT ---
-    unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}).limit(15))
-    if unscanned_files:
-        with st.spinner("🤖 Auto-scanning new or unchecked media for safety..."):
-            for f in unscanned_files:
-                try:
-                    resp = requests.get(f["url"], timeout=5)
-                    if resp.status_code == 200:
-                        safe = is_safe_content(resp.content, safety_model)
-                        files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
-                except:
-                    pass
-            st.rerun()
+    if safety_model is not None and not isinstance(safety_model, str):
+        unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}).limit(15))
+        if unscanned_files:
+            with st.spinner("🤖 Auto-scanning new media for safety..."):
+                for f in unscanned_files:
+                    try:
+                        resp = requests.get(f["url"], timeout=5)
+                        if resp.status_code == 200:
+                            pred = get_ai_score(resp.content, safety_model)
+                            if pred is not None:
+                                nsfw_score = pred[st.session_state.ai_target_class]
+                                is_flagged = bool(nsfw_score >= st.session_state.ai_threshold)
+                                files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": is_flagged}})
+                    except: pass
+                st.rerun()
 
     # --- PERFECT TOP NAV ---
     prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
@@ -1660,6 +1686,10 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     
                     st.markdown("**Add Content**")
+                    
+                    # ----------------------------------------------------
+                    # NEW TRANSPARENT AI UPLOAD SCANNER
+                    # ----------------------------------------------------
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
                         
@@ -1679,13 +1709,28 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     is_flagged = False
                                     
                                     if r_type == "image":
-                                        if not is_safe_content(file_bytes, safety_model):
-                                            if force_upload:
-                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged. Forced upload applied. Blurring in vault.")
-                                                is_flagged = True
+                                        if safety_model is None or isinstance(safety_model, str):
+                                            st.error(f"🚨 AI Offline: {safety_model}. Allowing upload without scanning.")
+                                            is_flagged = False
+                                        else:
+                                            # Call the mathematical logic directly
+                                            pred = get_ai_score(file_bytes, safety_model)
+                                            if pred is not None:
+                                                # Use the UI-configurable class index and threshold
+                                                nsfw_score = pred[st.session_state.ai_target_class]
+                                                
+                                                # Print EXACTLY what the AI sees so you aren't flying blind!
+                                                st.info(f"🧠 AI Vision Logs -> Class 0: {pred[0]*100:.1f}% | Class 1: {pred[1]*100:.1f}%")
+                                                
+                                                if nsfw_score >= st.session_state.ai_threshold:
+                                                    if force_upload:
+                                                        st.warning(f"🚨 '{html.escape(file.name)}' flagged. Forced upload applied. Blurring in vault.")
+                                                        is_flagged = True
+                                                    else:
+                                                        st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged. Check 'Force upload' to bypass and blur.")
+                                                        continue 
                                             else:
-                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged. Check 'Force upload' to bypass and blur.")
-                                                continue 
+                                                st.warning("⚠️ AI failed to process this specific image.")
                                         
                                     try:
                                         res = cloudinary.uploader.upload_large(file, resource_type=r_type, chunk_size=20000000) if file.size > 50000000 else cloudinary.uploader.upload(file, resource_type=r_type)
@@ -1701,6 +1746,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
         if not folders and not files:
             st.markdown('<p class="muted-text" style="text-align:center; margin-top: 50px;">This album is empty.</p>', unsafe_allow_html=True)
 
+        # Folders Render
         if folders:
             f_cols = st.columns(4)
             for i, folder in enumerate(folders):
@@ -1716,6 +1762,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                         html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
+        # Pure Circular Grid
         if files:
             st.write("<br>", unsafe_allow_html=True)
             img_cols = st.columns(4)
@@ -1749,6 +1796,9 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     
         st.markdown('<div class="custom-footer">© 2026 voidememo. All rights reserved.</div>', unsafe_allow_html=True)
 
+# ==========================================
+# 11. PROFILE HUB / OVERLAYS
+# ==========================================
 def render_profile_hub_overlay():
     st.markdown("<style>header {display: none;} .block-container {padding: 3rem 5% !important; max-width: 100vw;}</style>", unsafe_allow_html=True)
     
@@ -1794,24 +1844,44 @@ def render_profile_hub_overlay():
                     st.success("Profile Updated!"); time.sleep(1); st.rerun()
             
             st.markdown("<hr>", unsafe_allow_html=True)
+            
+            # --- NEW: AI ENGINE CALIBRATION PANEL ---
+            st.markdown("### 🧠 AI Engine Calibration")
+            st.write("If the AI is blurring the wrong images, adjust these settings. You can upload a test image in your album to see its exact math scores!")
+            
+            col_a, col_b = st.columns(2)
+            target_class = col_a.radio("Which Class is NSFW?", ["Class 0", "Class 1"], index=st.session_state.ai_target_class)
+            threshold = col_b.slider("Strictness Threshold (%)", 1, 100, int(st.session_state.ai_threshold * 100))
+            
+            if st.button("💾 Save AI Calibration", use_container_width=True):
+                st.session_state.ai_target_class = 0 if target_class == "Class 0" else 1
+                st.session_state.ai_threshold = threshold / 100.0
+                st.success("Calibration Saved! Now run the Deep Scan below to fix all old images.")
+            
+            st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Force a deep re-scan of ALL media to apply the latest Custom AI Protection rules.")
+            st.write("Force a deep re-scan of ALL media to apply your updated AI calibration.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing ALL media using Custom AI..."):
-                    updated_count = 0
-                    
-                    # Force scan every single image in the user's account
-                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
-                        try:
-                            resp = requests.get(f["url"], timeout=5)
-                            if resp.status_code == 200:
-                                safe = is_safe_content(resp.content, safety_model)
-                                files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
-                                updated_count += 1
-                        except Exception: pass
-                        
-                    st.success(f"Deep scan complete! Re-evaluated {updated_count} files.")
+                if isinstance(safety_model, str):
+                    st.error(f"Cannot scan: AI Model Offline ({safety_model})")
+                else:
+                    with st.spinner("Downloading and analyzing ALL media using Custom AI..."):
+                        updated_count = 0
+                        for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
+                            try:
+                                resp = requests.get(f["url"], timeout=5)
+                                if resp.status_code == 200:
+                                    pred = get_ai_score(resp.content, safety_model)
+                                    if pred is not None:
+                                        # Uses your UI-calibrated settings to decide what gets blurred
+                                        nsfw_score = pred[st.session_state.ai_target_class]
+                                        is_flagged = bool(nsfw_score >= st.session_state.ai_threshold)
+                                        files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": is_flagged}})
+                                        updated_count += 1
+                            except Exception: pass
+                            
+                        st.success(f"Deep scan complete! Re-evaluated {updated_count} files.")
 
         with c2:
             st.markdown("### Reaction Analytics")
