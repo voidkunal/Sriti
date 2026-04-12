@@ -57,12 +57,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# ADVANCED STRICT AI DATA PROTECTION ENGINE
+# ADVANCED DUAL-PIPELINE PROTECTION ENGINE
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
     try:
-        # compile=False prevents crashes from custom loss functions in downloaded models
         model = tf.keras.models.load_model('nsfw_model.h5', compile=False)
         return model
     except Exception as e:
@@ -72,52 +71,63 @@ def load_nsfw_model():
 safety_model = load_nsfw_model()
 
 def is_safe_content(file_bytes, model):
-    if model is None:
-        return True # Fail-safe: Allow upload if model is missing
-    
     try:
-        # 1. Standardized Preprocessing (Matches 99% of Keras NSFW models)
+        # Preprocess the image
         img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
-        img = img.resize((224, 224), Image.Resampling.BILINEAR)
+        img_resized = img.resize((224, 224), Image.Resampling.BILINEAR)
+        img_array = np.array(img_resized, dtype=np.float32)
         
-        # Normalize to [0, 1] range
-        img_array = np.array(img, dtype=np.float32) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
-        
-        # 2. Run Inference
-        prediction = model.predict(img_array, verbose=0)[0]
-        
-        # 3. Aggressive Targeting Logic for 18+ and Suggestive Content
         is_nsfw = False
         
-        if len(prediction) == 5:
-            # Expected format: [drawings, hentai, neutral, porn, sexy]
-            hentai_score = prediction[1]
-            porn_score = prediction[3]
-            sexy_score = prediction[4] # Catches swimwear, lingerie, short dresses
+        # --- PIPELINE 1: DEEP LEARNING (CNN) ---
+        if model is not None:
+            try:
+                norm_array = np.expand_dims(img_array / 255.0, axis=0)
+                prediction = model.predict(norm_array, verbose=0)[0]
+                
+                if len(prediction) == 5:
+                    # [drawings, hentai, neutral, porn, sexy]
+                    if prediction[1] >= 0.15 or prediction[3] >= 0.15 or prediction[4] >= 0.15:
+                        is_nsfw = True
+                elif len(prediction) >= 2:
+                    if prediction[1] >= 0.15:
+                        is_nsfw = True
+                elif len(prediction) == 1:
+                    if prediction[0] >= 0.15:
+                        is_nsfw = True
+            except:
+                pass # If CNN fails, fallback to Pipeline 2 silently
+                
+        # --- PIPELINE 2: MATHEMATICAL PIXEL HEURISTIC (Skin Detection) ---
+        # If the Deep Learning model is biased and missed it, this aggressive scanner catches it.
+        # It calculates the exact percentage of exposed human skin in the image.
+        if not is_nsfw:
+            r = img_array[:, :, 0]
+            g = img_array[:, :, 1]
+            b = img_array[:, :, 2]
             
-            # HYPER-STRICT THRESHOLD: 15% (0.15)
-            # If the AI detects even a 15% probability of suggestive/explicit material, flag it.
-            if porn_score >= 0.15 or hentai_score >= 0.15 or sexy_score >= 0.15:
+            max_rgb = np.maximum(r, np.maximum(g, b))
+            min_rgb = np.minimum(r, np.minimum(g, b))
+            
+            # Standard bounds for skin tones under varied lighting
+            rule1 = (r > 95) & (g > 40) & (b > 20)
+            rule2 = (max_rgb - min_rgb) > 15
+            rule3 = np.abs(r - g) > 15
+            rule4 = (r > g) & (r > b)
+            
+            skin_mask = rule1 & rule2 & rule3 & rule4
+            skin_percentage = np.sum(skin_mask) / (224 * 224)
+            
+            # If more than 22% of the image is exposed skin, flag it as suggestive.
+            # This aggressively targets swimwear, lingerie, and close-up body shots.
+            if skin_percentage > 0.22:
                 is_nsfw = True
-            elif (porn_score + hentai_score + sexy_score) >= 0.20:
-                is_nsfw = True
-                
-        elif len(prediction) >= 2:
-            # Binary Format: [safe, nsfw]
-            if prediction[1] >= 0.15:
-                is_nsfw = True
-                
-        elif len(prediction) == 1:
-            # Single node probability
-            if prediction[0] >= 0.15:
-                is_nsfw = True
-                
+
         return not is_nsfw
 
     except Exception as e:
         print(f"AI Processing Error: {e}")
-        return True # Do not crash the upload if the image file is corrupted
+        return True # Do not crash upload if image is corrupted
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -785,7 +795,7 @@ def render_preview_shared_overlay(notif_id_str):
                     st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
                 else:
                     vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                    st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
+                    st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', unsafe_allow_html=True))
                 st.markdown('</div><br>', unsafe_allow_html=True)
 
         if st.button("Mark as Read & Close", use_container_width=True):
@@ -903,10 +913,10 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Force a deep re-scan of ALL media to apply the latest AI Protection Model rules.")
+            st.write("Force a deep re-scan of ALL media to apply the latest Dual-Pipeline Protection rules.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing ALL media. This may take a moment..."):
+                with st.spinner("Downloading and analyzing ALL media using CNN + Mathematical Pixel Analysis..."):
                     updated_count = 0
                     
                     # Force scan every single image in the user's account
@@ -919,7 +929,7 @@ def render_profile_hub_overlay():
                                 updated_count += 1
                         except Exception: pass
                         
-                    st.success(f"Deep scan complete! Re-evaluated {updated_count} files with the most advanced rules.")
+                    st.success(f"Deep scan complete! Re-evaluated {updated_count} files.")
 
         with c2:
             st.markdown("### Reaction Analytics")
