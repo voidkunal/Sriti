@@ -44,104 +44,110 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# ADVANCED 3-LAYER CONTEXTUAL AI ENGINE
+# ADVANCED SEMANTIC CONTENT MODERATOR 
 # ==========================================
-@st.cache_resource(show_spinner=False)
-def load_nsfw_model():
-    try:
-        model = tf.keras.models.load_model('custom_nsfw_model.h5', compile=False)
-        return model
-    except Exception as e:
-        print(f"Failed to load AI model: {e}")
-        return None
-
-@st.cache_resource(show_spinner=False)
-def load_face_cascade():
-    return cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
-safety_model = load_nsfw_model()
-face_cascade = load_face_cascade()
-
-def is_safe_content(file_bytes, model):
-    try:
-        # 1. Image Preparation
-        img_bytes = io.BytesIO(file_bytes)
-        pil_img = Image.open(img_bytes).convert('RGB')
-        img_array = np.array(pil_img)
-        
-        is_portrait = False
-        skin_ratio = 0.0
-        
-        # --- LAYER 1: SEMANTIC CONTEXT (Computer Vision) ---
+class AdvancedContentModerator:
+    def __init__(self, model_path='custom_nsfw_model.h5'):
         try:
-            cv_img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-            
-            # A. Highly Accurate YCrCb Skin Detection
-            ycrcb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2YCrCb)
-            lower_skin = np.array([0, 133, 77], dtype=np.uint8)
-            upper_skin = np.array([255, 173, 127], dtype=np.uint8)
-            skin_mask = cv2.inRange(ycrcb, lower_skin, upper_skin)
-            
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-            skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel)
-            skin_ratio = np.sum(skin_mask > 0) / (cv_img.shape[0] * cv_img.shape[1])
-            
-            # B. Face Detection (Is this a Selfie/Portrait?)
-            gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
-            
-            if len(faces) > 0:
-                max_face_area = max([w * h for (x, y, w, h) in faces])
-                img_area = cv_img.shape[0] * cv_img.shape[1]
-                if (max_face_area / img_area) > 0.015: # Face is prominent
-                    is_portrait = True
+            self.model = tf.keras.models.load_model(model_path, compile=False)
         except Exception as e:
-            print(f"CV Context failed (continuing to base CNN): {e}")
+            print(f"Model load failed: {e}")
+            self.model = None
 
-        # --- LAYER 2: DYNAMIC THRESHOLD CALCULATOR ---
-        # Default balanced thresholds
-        p_thresh = 0.65
-        s_thresh = 0.75
-        h_thresh = 0.70
+        try:
+            # Load facial recognition algorithms
+            self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        except:
+            self.face_cascade = None
+
+    def calculate_image_complexity(self, gray_img):
+        # High Laplacian variance indicates sharp edges (Text, Code, Documents, Memes)
+        # Low variance indicates smooth gradients (Skin, Blurry photos)
+        return cv2.Laplacian(gray_img, cv2.CV_64F).var()
+
+    def detect_context(self, cv_img, gray_img, img_area):
+        # Detect Skin Percentage using YCrCb color space
+        ycrcb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2YCrCb)
+        lower_skin = np.array([0, 133, 77], dtype=np.uint8)
+        upper_skin = np.array([255, 173, 127], dtype=np.uint8)
+        skin_mask = cv2.inRange(ycrcb, lower_skin, upper_skin)
+        skin_ratio = np.sum(skin_mask > 0) / img_area if img_area > 0 else 0
+
+        # Detect Faces
+        has_face = False
+        face_ratio = 0.0
+        if self.face_cascade is not None:
+            faces = self.face_cascade.detectMultiScale(gray_img, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            if len(faces) > 0:
+                has_face = True
+                max_face_area = max([w * h for (x, y, w, h) in faces])
+                face_ratio = max_face_area / img_area if img_area > 0 else 0
+
+        return skin_ratio, has_face, face_ratio
+
+    def predict_base_cnn(self, pil_img):
+        if self.model is None: return 0.0
+        img_resized = pil_img.resize((224, 224), Image.Resampling.BILINEAR)
+        img_array = np.array(img_resized, dtype=np.float32)
+        norm_array = np.expand_dims(img_array / 255.0, axis=0)
         
-        if is_portrait:
-            # CONTEXT: It's a verified portrait/selfie. 
-            # We RELAX the rules to prevent false blocking of normal faces/shoulders.
-            p_thresh = 0.90
-            s_thresh = 0.92
-            h_thresh = 0.88
-        elif skin_ratio > 0.30:
-            # CONTEXT: High skin ratio but NO prominent face detected. High risk of suggestive content.
-            # We TIGHTEN the rules.
-            p_thresh = 0.45
-            s_thresh = 0.55
-            h_thresh = 0.50
+        try:
+            pred = self.model.predict(norm_array, verbose=0)[0]
+            if len(pred) == 5:
+                return max(pred[1], pred[3], pred[4]) # Returns max of [hentai, porn, sexy]
+            elif len(pred) >= 2:
+                return pred[1]
+            elif len(pred) == 1:
+                return pred[0]
+        except: pass
+        return 0.0
 
-        # --- LAYER 3: DEEP LEARNING INFERENCE ---
-        is_nsfw = False
-        if model is not None:
-            img_resized = pil_img.resize((224, 224), Image.Resampling.BILINEAR)
-            norm_array = np.expand_dims(np.array(img_resized, dtype=np.float32) / 255.0, axis=0)
+    def analyze(self, file_bytes):
+        try:
+            pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
+            cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            gray_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+            img_area = cv_img.shape[0] * cv_img.shape[1]
             
-            prediction = model.predict(norm_array, verbose=0)[0]
+            # 1. Extract Advanced Metrics
+            complexity = self.calculate_image_complexity(gray_img)
+            skin_ratio, has_face, face_ratio = self.detect_context(cv_img, gray_img, img_area)
             
-            if len(prediction) == 5:
-                # Classes: [drawings, hentai, neutral, porn, sexy]
-                hentai_score = prediction[1]
-                porn_score = prediction[3]
-                sexy_score = prediction[4]
+            # 2. Get Raw CNN Score
+            nsfw_score = self.predict_base_cnn(pil_img)
+            
+            # -------------------------------------------------------------
+            # 3. LLM-STYLE LOGICAL DECISION TREE (Noise Clearing)
+            # -------------------------------------------------------------
+            
+            # Guardrail 1: It's a text document, code screenshot, or meme (High Complexity)
+            if complexity > 1000:
+                nsfw_score -= 0.35 
                 
-                if porn_score >= p_thresh or sexy_score >= s_thresh or hentai_score >= h_thresh:
-                    is_nsfw = True
-            else:
-                if np.max(prediction) >= 0.80:
-                    is_nsfw = True
-                    
-        return not is_nsfw
+            # Guardrail 2: It's a Selfie or Portrait (Prominent Face)
+            if has_face and face_ratio > 0.02:
+                nsfw_score -= 0.40 
+                
+            # Guardrail 3: High Risk Body Shot (Lots of skin, NO Face)
+            if skin_ratio > 0.45 and not has_face:
+                nsfw_score += 0.30 
+                
+            # FINAL VERDICT: 
+            # Only blocks if the score remains above 75% after all logical checks.
+            return not (nsfw_score >= 0.75)
+            
+        except Exception as e:
+            print(f"Moderator failed: {e}")
+            return True # Fail-safe allows upload
 
-    except Exception as e:
-        print(f"AI Pipeline Critical Error: {e}")
-        return True # Fail-safe allows upload if code crashes
+@st.cache_resource
+def get_moderator():
+    return AdvancedContentModerator()
+
+moderator = get_moderator()
+
+def is_safe_content(file_bytes, _=None): 
+    return moderator.analyze(file_bytes)
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -420,7 +426,6 @@ if st.session_state.logged_in:
         
         del st.query_params["action"]
         del st.query_params["file_id"]
-        # Maintain Lightbox state after pressing a manual override button
         st.rerun()
 
     if "react" in st.query_params:
@@ -913,10 +918,10 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Force a deep re-scan of ALL media to apply the latest Dual-Pipeline Protection rules.")
+            st.write("Force a deep re-scan of ALL media to apply the latest Advanced Semantic Protection rules.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing ALL media using 3-Layer CV Semantic Engine..."):
+                with st.spinner("Analyzing all media with Semantic Context AI..."):
                     updated_count = 0
                     
                     for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
@@ -1546,15 +1551,14 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
-        with st.spinner("🤖 Auto-scanning media with 3-Layer Contextual AI..."):
+        with st.spinner("🤖 Auto-scanning media with Advanced Semantic AI..."):
             for f in unscanned_files:
                 try:
                     resp = requests.get(f["url"], timeout=5)
                     if resp.status_code == 200:
                         safe = is_safe_content(resp.content, safety_model)
                         files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
-                except:
-                    pass
+                except: pass
             st.rerun()
 
     prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
