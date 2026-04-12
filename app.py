@@ -85,41 +85,24 @@ def is_safe_content(file_bytes, model):
                 norm_array = np.expand_dims(img_array / 255.0, axis=0)
                 prediction = model.predict(norm_array, verbose=0)[0]
                 
-                # Optimized logic to catch NSFW accurately without false positives
+                # OPTIMIZED: Much higher thresholds (85%-95%) to stop false positives on normal photos
                 if len(prediction) == 5:
-                    # [drawings, hentai, neutral, porn, sexy]
-                    if prediction[1] >= 0.60 or prediction[3] >= 0.60 or prediction[4] >= 0.70:
+                    # Classes: [drawings, hentai, neutral, porn, sexy]
+                    if prediction[1] >= 0.85 or prediction[3] >= 0.85 or prediction[4] >= 0.95:
                         is_nsfw = True
                 elif len(prediction) >= 2:
-                    if prediction[1] >= 0.60:
+                    if prediction[1] >= 0.85:
                         is_nsfw = True
                 elif len(prediction) == 1:
-                    if prediction[0] >= 0.60:
+                    if prediction[0] >= 0.85:
                         is_nsfw = True
             except Exception as e:
-                print("CNN Prediction failed, falling back to math heuristic:", e)
+                print("CNN Prediction failed:", e)
                 pass 
                 
-        # --- PIPELINE 2: MATHEMATICAL PIXEL HEURISTIC (Skin Detection) ---
-        if not is_nsfw:
-            r = img_array[:, :, 0]
-            g = img_array[:, :, 1]
-            b = img_array[:, :, 2]
-            
-            max_rgb = np.maximum(r, np.maximum(g, b))
-            min_rgb = np.minimum(r, np.minimum(g, b))
-            
-            rule1 = (r > 95) & (g > 40) & (b > 20)
-            rule2 = (max_rgb - min_rgb) > 15
-            rule3 = np.abs(r - g) > 15
-            rule4 = (r > g) & (r > b)
-            
-            skin_mask = rule1 & rule2 & rule3 & rule4
-            skin_percentage = np.sum(skin_mask) / (224 * 224)
-            
-            # Mathematical lock - flags image if it is roughly 40%+ exposed skin tones.
-            if skin_percentage > 0.40:
-                is_nsfw = True
+        # NOTE: The mathematical skin-pixel detector has been completely removed. 
+        # It was falsely triggering on normal portraits, selfies, and sketches. 
+        # We now rely exclusively on the AI model + manual user overrides.
 
         return not is_nsfw
 
@@ -393,11 +376,19 @@ if st.session_state.logged_in:
                     folders_col.update_one({"_id": file["folder_id"]}, {"$set": {"cover_photo": url}})
                 elif action == "share":
                     st.session_state.pending_share = str(fid)
+                # ==========================================
+                # NEW PERMANENT OVERRIDE ACTIONS
+                # ==========================================
+                elif action == "unflag":
+                    files_col.update_one({"_id": fid}, {"$set": {"is_flagged": False}})
+                elif action == "flag":
+                    files_col.update_one({"_id": fid}, {"$set": {"is_flagged": True}})
+
         except InvalidId: pass
         
         del st.query_params["action"]
         del st.query_params["file_id"]
-        if "lightbox_idx" in st.query_params: del st.query_params["lightbox_idx"]
+        # Keep lightbox index so the user stays on the same image after toggling safety flag
         st.rerun()
 
     if "react" in st.query_params:
@@ -483,7 +474,6 @@ def developer_api_dialog(folder_id_str):
     else:
         st.success("✅ API is Currently Active" if has_api else "⏸️ API is Currently Paused")
         
-        # Current base URL fallback
         endpoint_url = f"https://voidmemo.streamlit.app/?embed=true&api_key={api_key}" 
         
         st.text_input("Your Secret API Endpoint URL:", value=endpoint_url, disabled=True)
@@ -567,7 +557,6 @@ def get_album_media():
                 return json_data["data"]
     return []
 
-# Example Usage
 for media in get_album_media():
     print(f"File: {{media['filename']}} | Link: {{media['url']}}")
 """, language="python")
@@ -645,7 +634,6 @@ def locked_reaction_dialog(remaining_seconds):
     st.info(f"Time remaining: **{hours} hours and {minutes} minutes**")
     if st.button("Got it", use_container_width=True): st.rerun()
 
-# --- DUPLICATE FINDER ALGORITHM ---
 @st.dialog("🔍 Find & Remove Duplicates")
 def find_duplicates_dialog(folder_id):
     st.write("This tool will scan the current album for exact duplicate images. It will keep one original and permanently delete the rest.")
@@ -906,7 +894,7 @@ def render_profile_hub_overlay():
             st.write("Force a deep re-scan of ALL media to apply the latest Dual-Pipeline Protection rules.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing ALL media using CNN + Mathematical Pixel Analysis..."):
+                with st.spinner("Downloading and analyzing ALL media using CNN..."):
                     updated_count = 0
                     
                     # Force scan every single image in the user's account
@@ -1072,7 +1060,8 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     safe_url = html.escape(file['url'])
 
     blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
-    # Enhanced Reveal Button
+    
+    # Keeps the temporary button for quick peeks
     reveal_btn = f"<button onclick=\"document.getElementById('lb-media').style.filter='none'; document.getElementById('lb-media').style.transform='scale(1)'; this.style.display='none';\" style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5);'>👁️ Reveal Sensitive Content</button>" if is_flagged else ""
 
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
@@ -1080,6 +1069,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
+    # DYNAMIC MENU: Includes permanent Safe/Sensitive overrides
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -1088,6 +1078,14 @@ def render_lightbox_fullscreen(idx, folder_id_str):
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="pin", file_id=fid)}" target="_self">📌 Pin</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="cover", file_id=fid)}" target="_self">🖼️ Set Cover</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="move", file_id=fid)}" target="_self">📂 Move</a>
+    '''
+    
+    if is_flagged:
+        action_html += f'<a href="{get_nav_link(page="app", folder=safe_folder_id, action="unflag", file_id=fid)}" target="_self" style="color: #34d399; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 12px 12px;">✅ Mark as Safe</a>'
+    else:
+        action_html += f'<a href="{get_nav_link(page="app", folder=safe_folder_id, action="flag", file_id=fid)}" target="_self" style="color: #f59e0b; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 12px 12px;">🚨 Mark Sensitive</a>'
+
+    action_html += f'''
             <a href="{safe_url}" target="_blank" download>⬇️ Download</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="confirm_delete", file_id=fid)}" target="_self" style="color: #ff3b30;">🗑️ Delete</a>
         </div>
@@ -1197,8 +1195,6 @@ if not st.session_state.logged_in:
         st.query_params["page"] = "landing"
         st.rerun()
 
-    # --- FIXED LIVE WALLPAPER ---
-    # Setting z-index to 0 and pointer-events to none so it NEVER traps clicks
     wallpaper_html = '''
     <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; overflow: hidden; background: #000; pointer-events: none;">
         <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
@@ -1212,7 +1208,6 @@ if not st.session_state.logged_in:
     '''
 
     if app_page == "landing":
-        # Render Landing UI securely on top of the wallpaper
         landing_html = wallpaper_html + """<style>
 div[data-testid="stAppViewBlockContainer"] { background: transparent !important; padding: 0 !important; margin: 0 !important; max-width: 100vw !important; border: none !important; box-shadow: none !important; }
 div[data-testid="stAppViewBlockContainer"]::before { display: none !important; }
@@ -1238,7 +1233,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; }
     else:
         st.markdown(wallpaper_html, unsafe_allow_html=True)
 
-        # FIXED GLASSMORPHISM CONTAINER Z-INDEX FOR AUTH
         auth_css = """<style>
 .stApp, .main, [data-testid="stAppViewContainer"] { background: transparent !important; }
 p, h1, h2, h3, h4, h5, h6, span, label, li { color: #ffffff !important; }
