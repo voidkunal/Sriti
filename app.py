@@ -45,33 +45,47 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# PURE AI PROTECTION ENGINE (AUTOMATED)
+# 100% AUTOMATED HYBRID AI ENGINE
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
     model_path = 'custom_nsfw_model.h5'
-    
-    # --- GOOGLE DRIVE BYPASS ---
-    gdrive_file_id = "1tNMbShHnVUBEjW-7O89SpeQMQzx2E5jw" 
+    gdrive_file_id = "1tNMbShHnVUBEjW-7O89SpeQMQzx2E5jw"  # Fallback if GitHub corrupts the file
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
         print("Downloading real AI model from secure cloud storage...")
         try:
             download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
             urllib.request.urlretrieve(download_url, model_path)
-            print("Download complete!")
-        except Exception as e:
-            print(f"Failed to download model: {e}")
-            return None
+        except Exception: pass
 
     try:
-        model = tf.keras.models.load_model(model_path, compile=False)
-        return model
+        return tf.keras.models.load_model(model_path, compile=False)
     except Exception as e:
         print(f"Failed to load AI model: {e}")
         return None
 
 safety_model = load_nsfw_model()
+
+def calculate_skin_ratio(pil_img):
+    """Mathematical fallback to verify if the AI is hallucinating."""
+    img = pil_img.resize((100, 100), Image.Resampling.NEAREST)
+    arr = np.array(img, dtype=np.int16)
+    
+    R = arr[:, :, 0]
+    G = arr[:, :, 1]
+    B = arr[:, :, 2]
+    
+    max_rgb = np.maximum(R, np.maximum(G, B))
+    min_rgb = np.minimum(R, np.minimum(G, B))
+    
+    rule1 = (R > 95) & (G > 40) & (B > 20)
+    rule2 = (max_rgb - min_rgb) > 15
+    rule3 = np.abs(R - G) > 15
+    rule4 = (R > G) & (R > B)
+    
+    skin_mask = rule1 & rule2 & rule3 & rule4
+    return np.mean(skin_mask)
 
 def is_safe_content(file_bytes, model):
     if model is None:
@@ -80,40 +94,54 @@ def is_safe_content(file_bytes, model):
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         
-        # DYNAMIC SHAPE DETECTION
+        # 1. GROUND TRUTH: Mathematical Skin Detection
+        skin_ratio = calculate_skin_ratio(pil_img)
+        
+        # 2. SHAPE DETECTION
         input_shape = model.input_shape
         target_size = (224, 224) 
         if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
             target_size = (input_shape[1], input_shape[2])
             
-        img_resized = pil_img.resize(target_size, Image.Resampling.BILINEAR)
-        img_array = np.array(img_resized, dtype=np.float32)
+        img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
         
-        # RESTORED NORMALIZATION: Allows the model to accurately 'see' the image
-        norm_array = np.expand_dims(img_array / 255.0, axis=0)
+        # 3. AUTO-CALIBRATING NORMALIZATION
+        # Tests both standard normalizations and lets the AI pick the one it understands best
+        norm1 = np.expand_dims(img_array / 255.0, axis=0) 
+        norm2 = np.expand_dims((img_array / 127.5) - 1.0, axis=0) 
         
-        prediction = model.predict(norm_array, verbose=0)[0]
-        is_nsfw = False
+        pred1 = model.predict(norm1, verbose=0)[0]
+        pred2 = model.predict(norm2, verbose=0)[0]
         
-        # AUTOMATED CLASS MAPPING LOGIC
-        if len(prediction) == 5:
-            nsfw_score = prediction[1] + prediction[3] + prediction[4]
-            if nsfw_score >= 0.65:  
-                is_nsfw = True
-        elif len(prediction) == 2:
-            # FIXED: Evaluates Index 0. 
-            # Index 1 was blurring Normal photos, which means Index 0 is the true NSFW class for your custom model.
-            if prediction[0] >= 0.65: 
-                is_nsfw = True
-        elif len(prediction) == 1:
-            if prediction[0] >= 0.65: 
-                is_nsfw = True
-                
-        return not is_nsfw # Returns True if safe
+        pred = pred1 if np.max(pred1) > np.max(pred2) else pred2
+        is_nsfw_ai = False
         
+        # 4. NEURAL NETWORK PARSING
+        if len(pred) == 5:
+            nsfw_score = pred[1] + pred[3] + pred[4]
+            is_nsfw_ai = nsfw_score >= 0.65
+        elif len(pred) == 2:
+            # Only flag if high confidence AND correlates with actual skin tones
+            if pred[0] > 0.65 and skin_ratio > 0.15: is_nsfw_ai = True
+            elif pred[1] > 0.65 and skin_ratio > 0.15: is_nsfw_ai = True
+        elif len(pred) == 1:
+            is_nsfw_ai = pred[0] >= 0.65
+            
+        # 5. AUTOMATED VERIFICATION GUARDRAILS (Stops Hallucinations)
+        if is_nsfw_ai:
+            # AI says it's NSFW. But if the image has almost zero skin (dog, car, sunset), the AI is hallucinating.
+            if skin_ratio < 0.03 and len(pred) != 5:
+                return True # Safe (Override False Positive)
+            return False # Confirmed NSFW
+        else:
+            # AI says it's Safe. But if the image is massive amounts of skin, the AI missed it.
+            if skin_ratio > 0.55:
+                return False # Confirmed NSFW (Override False Negative)
+            return True # Safe
+            
     except Exception as e:
         print(f"AI Prediction Crash: {e}")
-        return True # Allows upload if unexpected crash
+        return True # Allows upload to continue smoothly
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -380,16 +408,12 @@ if st.session_state.logged_in:
                     folders_col.update_one({"_id": file["folder_id"]}, {"$set": {"cover_photo": url}})
                 elif action == "share":
                     st.session_state.pending_share = str(fid)
-                
-                elif action == "unflag":
-                    files_col.update_one({"_id": fid}, {"$set": {"is_flagged": False}})
-                elif action == "flag":
-                    files_col.update_one({"_id": fid}, {"$set": {"is_flagged": True}})
 
         except InvalidId: pass
         
         del st.query_params["action"]
         del st.query_params["file_id"]
+        if "lightbox_idx" in st.query_params: del st.query_params["lightbox_idx"]
         st.rerun()
 
     if "react" in st.query_params:
@@ -818,11 +842,12 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Force a deep re-scan of ALL media using the automated AI Protection rules.")
+            st.write("Force a deep re-scan of ALL media using the Automated Hybrid AI Engine.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Analyzing all media with Automated AI Engine..."):
+                with st.spinner("Analyzing all media with Automated Hybrid AI Engine..."):
                     updated_count = 0
+                    
                     for f in files_col.find({"username": st.session_state.username}):
                         try:
                             check_url = f["url"]
@@ -990,13 +1015,15 @@ def render_lightbox_fullscreen(idx, folder_id_str):
 
     blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
     
-    reveal_btn = f"<a href='{get_nav_link(page='app', folder=safe_folder_id, action='unflag', file_id=fid)}' target='_self' style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5); text-decoration:none;'>👁️ Reveal & Mark as Safe</a>" if is_flagged else ""
+    # Safe temporary reveal for flagged photos (NO permanent unflagging logic)
+    reveal_btn = f"<button onclick=\"document.getElementById('lb-media').style.filter='none'; document.getElementById('lb-media').style.transform='scale(1)'; this.style.display='none';\" style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5);'>👁️ Reveal Sensitive Content</button>" if is_flagged else ""
 
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
+    # DYNAMIC MENU: Purely automated, no manual override options.
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -1005,15 +1032,6 @@ def render_lightbox_fullscreen(idx, folder_id_str):
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="pin", file_id=fid)}" target="_self">📌 Pin</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="cover", file_id=fid)}" target="_self">🖼️ Set Cover</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="move", file_id=fid)}" target="_self">📂 Move</a>
-    '''
-    
-    # Kept standard unflag/flag functions for developer manual testing, but hidden from regular user flow.
-    if is_flagged:
-        action_html += f'<a href="{get_nav_link(page="app", folder=safe_folder_id, action="unflag", file_id=fid)}" target="_self" style="color: #34d399; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 12px 12px;">✅ Mark as Safe</a>'
-    else:
-        action_html += f'<a href="{get_nav_link(page="app", folder=safe_folder_id, action="flag", file_id=fid)}" target="_self" style="color: #f59e0b; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 12px 12px;">🚨 Mark Sensitive</a>'
-
-    action_html += f'''
             <a href="{safe_url}" target="_blank" download>⬇️ Download</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="confirm_delete", file_id=fid)}" target="_self" style="color: #ff3b30;">🗑️ Delete</a>
         </div>
@@ -1068,7 +1086,7 @@ def render_story_fullscreen(group_idx, story_idx):
     is_flagged = item.get("is_flagged", False)
     blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
     
-    reveal_btn = f"<a href='{get_nav_link(page='app', folder='root', action='unflag', file_id=str(item['_id']))}' target='_self' style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5); text-decoration:none;'>👁️ Reveal & Mark as Safe</a>" if is_flagged else ""
+    reveal_btn = f"<button onclick=\"document.getElementById('st-media').style.filter='none'; document.getElementById('st-media').style.transform='scale(1)'; this.style.display='none';\" style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5);'>👁️ Reveal Sensitive Content</button>" if is_flagged else ""
 
     media_element = f"<img id='st-media' src='{safe_url}' style='max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if item['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 100%; max-height: 100%; object-fit: contain;'></video>"
     
@@ -1124,6 +1142,7 @@ if not st.session_state.logged_in:
         st.query_params["page"] = "landing"
         st.rerun()
 
+    # Z-index strictly 0, pointer events none.
     wallpaper_html = '''
     <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; overflow: hidden; background: #000; pointer-events: none;">
         <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
@@ -1452,7 +1471,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     unscanned_files = list(files_col.find({"username": st.session_state.username, "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
-        with st.spinner("🤖 Auto-scanning media with Pure AI Engine..."):
+        with st.spinner("🤖 Auto-scanning media with Automated Hybrid AI..."):
             for f in unscanned_files:
                 try:
                     check_url = f["url"]
