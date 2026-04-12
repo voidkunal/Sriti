@@ -62,7 +62,6 @@ st.markdown("""
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
     try:
-        # Updated to load the custom model you uploaded
         model = tf.keras.models.load_model('custom_nsfw_model.h5', compile=False)
         return model
     except Exception as e:
@@ -86,19 +85,20 @@ def is_safe_content(file_bytes, model):
                 norm_array = np.expand_dims(img_array / 255.0, axis=0)
                 prediction = model.predict(norm_array, verbose=0)[0]
                 
-                # FIXED: Raised confidence threshold from 0.15 (15%) to 0.75 (75%) to stop false positives
+                # Optimized logic to catch NSFW accurately without false positives
                 if len(prediction) == 5:
                     # [drawings, hentai, neutral, porn, sexy]
-                    if prediction[1] >= 0.75 or prediction[3] >= 0.75 or prediction[4] >= 0.75:
+                    if prediction[1] >= 0.60 or prediction[3] >= 0.60 or prediction[4] >= 0.70:
                         is_nsfw = True
                 elif len(prediction) >= 2:
-                    if prediction[1] >= 0.75:
+                    if prediction[1] >= 0.60:
                         is_nsfw = True
                 elif len(prediction) == 1:
-                    if prediction[0] >= 0.75:
+                    if prediction[0] >= 0.60:
                         is_nsfw = True
-            except:
-                pass # If CNN fails, fallback to Pipeline 2 silently
+            except Exception as e:
+                print("CNN Prediction failed, falling back to math heuristic:", e)
+                pass 
                 
         # --- PIPELINE 2: MATHEMATICAL PIXEL HEURISTIC (Skin Detection) ---
         if not is_nsfw:
@@ -117,8 +117,8 @@ def is_safe_content(file_bytes, model):
             skin_mask = rule1 & rule2 & rule3 & rule4
             skin_percentage = np.sum(skin_mask) / (224 * 224)
             
-            # FIXED: Raised skin pixel threshold from 22% to 45% so portraits don't get blurred
-            if skin_percentage > 0.45:
+            # Mathematical lock - flags image if it is roughly 40%+ exposed skin tones.
+            if skin_percentage > 0.40:
                 is_nsfw = True
 
         return not is_nsfw
@@ -148,11 +148,10 @@ cloudinary.config(
 )
 
 # ==========================================
-# 3. HEADLESS API ROUTER (DISCRETE SLIDER)
+# 3. HEADLESS API ROUTER
 # ==========================================
 api_req_key = st.query_params.get("api_key")
 if api_req_key:
-    # Make the background transparent and hide Streamlit UI
     st.markdown("""
     <style>
         #MainMenu {visibility: hidden !important;} 
@@ -189,13 +188,12 @@ if api_req_key:
                 else:
                     media_html += f'<video src="{safe_url}" controls class="slide-media" style="flex: 0 0 auto; width: 250px; height: 380px; object-fit: cover; border-radius: 12px; scroll-snap-align: center; box-shadow: 0 8px 16px rgba(0,0,0,0.3); transition: transform 0.3s ease;"></video>'
                     
-            # Use components.html to run Javascript cleanly isolated from Streamlit
             carousel_html = f"""
             <style>
                 body {{ margin: 0; padding: 0; background: transparent; overflow: hidden; font-family: sans-serif; }}
                 .carousel-wrapper {{ position: relative; width: 100%; padding: 10px 40px; box-sizing: border-box; }}
-                .carousel-track {{ display: flex; gap: 20px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; -ms-overflow-style: none; /* IE and Edge */ scrollbar-width: none; /* Firefox */ }}
-                .carousel-track::-webkit-scrollbar {{ display: none; /* Chrome */ }}
+                .carousel-track {{ display: flex; gap: 20px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; -ms-overflow-style: none; scrollbar-width: none; }}
+                .carousel-track::-webkit-scrollbar {{ display: none; }}
                 .slide-media:hover {{ transform: scale(1.02); }}
                 .slide-arrow {{ position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255, 255, 255, 0.8); color: #333; border: none; font-size: 24px; font-weight: bold; cursor: pointer; width: 40px; height: 40px; border-radius: 50%; z-index: 10; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: background 0.3s ease; }}
                 .slide-arrow:hover {{ background: rgba(255, 255, 255, 1); }}
@@ -213,22 +211,16 @@ if api_req_key:
             
             <script>
                 const track = document.getElementById("carouselTrack");
-                const scrollAmount = 270; // Item width (250) + gap (20)
-                
+                const scrollAmount = 270; 
                 function slideLeft() {{ track.scrollBy({{ left: -scrollAmount, behavior: 'smooth' }}); }}
                 function slideRight() {{ 
-                    // Loop back to start if at the end
                     if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{
                         track.scrollTo({{ left: 0, behavior: 'smooth' }});
                     }} else {{
                         track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); 
                     }}
                 }}
-                
-                // Auto-slide every 3.5 seconds
                 let autoSlide = setInterval(slideRight, 3500);
-                
-                // Pause when hovering over the carousel
                 const wrapper = document.getElementById('carouselWrapper');
                 wrapper.addEventListener('mouseenter', () => clearInterval(autoSlide));
                 wrapper.addEventListener('mouseleave', () => {{ autoSlide = setInterval(slideRight, 3500); }});
@@ -1205,10 +1197,10 @@ if not st.session_state.logged_in:
         st.query_params["page"] = "landing"
         st.rerun()
 
-    # Generate Universal Live Wallpaper
-    # FIXED: Re-structured this overlay to force it to show up on top of any Streamlit default background, but behind the text.
+    # --- FIXED LIVE WALLPAPER ---
+    # Setting z-index to 0 and pointer-events to none so it NEVER traps clicks
     wallpaper_html = '''
-    <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 998; overflow: hidden; background: #000;">
+    <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; overflow: hidden; background: #000; pointer-events: none;">
         <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
     '''
     for i in range(60):
@@ -1220,12 +1212,12 @@ if not st.session_state.logged_in:
     '''
 
     if app_page == "landing":
-        # Adjusted z-index and structure to stack over the wallpaper overlay smoothly
+        # Render Landing UI securely on top of the wallpaper
         landing_html = wallpaper_html + """<style>
 div[data-testid="stAppViewBlockContainer"] { background: transparent !important; padding: 0 !important; margin: 0 !important; max-width: 100vw !important; border: none !important; box-shadow: none !important; }
 div[data-testid="stAppViewBlockContainer"]::before { display: none !important; }
 </style>
-<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 999; display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.95) 100%);">
+<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 10; display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.95) 100%);">
 <div style="position: absolute; top: 0; left: 0; width: 100%; padding: 20px 5%; display: flex; justify-content: space-between; align-items: center;">
 <a href="?page=landing" target="_self" style="font-size: 24px; font-weight: 800; color: white; text-decoration: none; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">voidememo</a>
 <div style="display: flex; gap: 20px; align-items: center;">
@@ -1244,8 +1236,9 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; }
         st.markdown(landing_html, unsafe_allow_html=True)
         
     else:
-        st.markdown(wallpaper_html, unsafe_allow_html=True) # Inject fixed wallpaper behind auth pages too
+        st.markdown(wallpaper_html, unsafe_allow_html=True)
 
+        # FIXED GLASSMORPHISM CONTAINER Z-INDEX FOR AUTH
         auth_css = """<style>
 .stApp, .main, [data-testid="stAppViewContainer"] { background: transparent !important; }
 p, h1, h2, h3, h4, h5, h6, span, label, li { color: #ffffff !important; }
@@ -1255,13 +1248,12 @@ p, h1, h2, h3, h4, h5, h6, span, label, li { color: #ffffff !important; }
 .stCheckbox label p { color: white !important; }
 .stButton > button[kind="primary"] { background-color: #0a84ff !important; color: #ffffff !important; border: none !important; border-radius: 12px !important; padding: 14px 24px !important; font-weight: 600 !important; width: 100% !important; margin-top: 10px !important; box-shadow: 0 4px 15px rgba(10, 132, 255, 0.4) !important; }
 
-/* The containing block fix: Remove backdrop-filter from parent, apply to ::before */
 div[data-testid="stAppViewBlockContainer"] { 
     padding: 50px 40px !important; 
     max-width: 480px !important; 
     margin: 12vh auto 5vh auto !important; 
     position: relative; 
-    z-index: 999;
+    z-index: 10 !important; 
     background-color: transparent !important;
     border: none !important;
     box-shadow: none !important;
@@ -1572,7 +1564,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     is_root = current is None or current.get("parent_id") is None
 
     # --- AUTO-SCANNER ON BOOT ---
-    # Automatically triggers when the user loads the dashboard and finds unscanned files
     unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
         with st.spinner("🤖 Auto-scanning new or unchecked media for safety..."):
