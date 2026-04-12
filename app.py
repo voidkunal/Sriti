@@ -43,7 +43,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# PURE AI PROTECTION ENGINE
+# PURE AI PROTECTION ENGINE (STRICT)
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
@@ -57,29 +57,43 @@ def load_nsfw_model():
 safety_model = load_nsfw_model()
 
 def is_safe_content(file_bytes, model):
+    if model is None:
+        # If the model is offline, return True so the app doesn't crash, 
+        # but the UI will show a massive red warning to the developer.
+        return True 
+        
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
-        img_resized = pil_img.resize((224, 224), Image.Resampling.BILINEAR)
+        
+        # DYNAMIC SHAPE DETECTION: Asks your specific model what image size it expects
+        input_shape = model.input_shape
+        target_size = (224, 224) # Fallback
+        if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
+            target_size = (input_shape[1], input_shape[2])
+            
+        img_resized = pil_img.resize(target_size, Image.Resampling.BILINEAR)
         img_array = np.array(img_resized, dtype=np.float32)
+        
+        # Normalize (Standard 0-1)
         norm_array = np.expand_dims(img_array / 255.0, axis=0)
         
-        if model is not None:
-            prediction = model.predict(norm_array, verbose=0)[0]
+        prediction = model.predict(norm_array, verbose=0)[0]
+        
+        # AGGRESSIVE THRESHOLDS (50%+)
+        if len(prediction) == 5:
+            # Classes: [drawings, hentai, neutral, porn, sexy]
+            if prediction[1] >= 0.50 or prediction[3] >= 0.50 or prediction[4] >= 0.50:
+                return False
+        elif len(prediction) >= 2:
+            if prediction[1] >= 0.50: return False
+        elif len(prediction) == 1:
+            if prediction[0] >= 0.50: return False
             
-            if len(prediction) == 5:
-                # Classes: [drawings, hentai, neutral, porn, sexy]
-                # Only flag if highly confident
-                if prediction[1] > 0.85 or prediction[3] > 0.85 or prediction[4] > 0.90:
-                    return False
-            elif len(prediction) >= 2:
-                if prediction[1] > 0.85: return False
-            elif len(prediction) == 1:
-                if prediction[0] > 0.85: return False
-                
-        return True # Safe by default
-    except Exception as e:
-        print(f"AI Pipeline Error: {e}")
         return True 
+    except Exception as e:
+        print(f"AI Prediction Crash: {e}")
+        # If the prediction logic crashes, flag it as unsafe so you know it's broken!
+        return False 
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -154,18 +168,25 @@ if api_req_key:
                 .left-arrow {{ left: 0px; }}
                 .right-arrow {{ right: 0px; }}
             </style>
+            
             <div class="carousel-wrapper" id="carouselWrapper">
                 <button class="slide-arrow left-arrow" onclick="slideLeft()">&#10094;</button>
-                <div class="carousel-track" id="carouselTrack">{media_html}</div>
+                <div class="carousel-track" id="carouselTrack">
+                    {media_html}
+                </div>
                 <button class="slide-arrow right-arrow" onclick="slideRight()">&#10095;</button>
             </div>
+            
             <script>
                 const track = document.getElementById("carouselTrack");
                 const scrollAmount = 270; 
                 function slideLeft() {{ track.scrollBy({{ left: -scrollAmount, behavior: 'smooth' }}); }}
                 function slideRight() {{ 
-                    if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{ track.scrollTo({{ left: 0, behavior: 'smooth' }});
-                    }} else {{ track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); }}
+                    if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{
+                        track.scrollTo({{ left: 0, behavior: 'smooth' }});
+                    }} else {{
+                        track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); 
+                    }}
                 }}
                 let autoSlide = setInterval(slideRight, 3500);
                 const wrapper = document.getElementById('carouselWrapper');
@@ -178,6 +199,7 @@ if api_req_key:
             st.markdown('<p style="color: white; text-align: center;">Gallery is empty.</p>', unsafe_allow_html=True)
     else:
         st.error("Access Denied. Invalid or disabled API Key.")
+        
     st.stop()
 
 
@@ -339,7 +361,7 @@ if st.session_state.logged_in:
                 elif action == "share":
                     st.session_state.pending_share = str(fid)
                 
-                # THIS PERMANENTLY UNBLURS OR BLURS THE IMAGE IN THE DATABASE
+                # --- MANUAL OVERRIDE CONTROLS (RESTORED) ---
                 elif action == "unflag":
                     files_col.update_one({"_id": fid}, {"$set": {"is_flagged": False}})
                 elif action == "flag":
@@ -349,7 +371,7 @@ if st.session_state.logged_in:
         
         del st.query_params["action"]
         del st.query_params["file_id"]
-        if "lightbox_idx" in st.query_params: del st.query_params["lightbox_idx"]
+        # Keep lightbox open at the same index
         st.rerun()
 
     if "react" in st.query_params:
@@ -419,9 +441,13 @@ if st.session_state.logged_in:
 def developer_api_dialog(folder_id_str):
     fid = ObjectId(folder_id_str)
     folder = folders_col.find_one({"_id": fid})
+    
     st.markdown("### Read-Only API Integration")
+    st.write("Generate a REST endpoint to safely embed this album's media on your external website, portfolio, or app.")
+    
     has_api = folder.get("api_enabled", False)
     api_key = folder.get("api_key", "")
+    
     if not api_key:
         if st.button("Generate API Key", type="primary", use_container_width=True):
             new_key = "vm_api_" + secrets.token_urlsafe(24)
@@ -431,10 +457,24 @@ def developer_api_dialog(folder_id_str):
         st.success("✅ API is Currently Active" if has_api else "⏸️ API is Currently Paused")
         endpoint_url = f"https://voidmemo.streamlit.app/?embed=true&api_key={api_key}" 
         st.text_input("Your Secret API Endpoint URL:", value=endpoint_url, disabled=True)
+        
         toggle_text = "Pause API Access" if has_api else "Resume API Access"
         if st.button(toggle_text, use_container_width=True):
             folders_col.update_one({"_id": fid}, {"$set": {"api_enabled": not has_api}})
             st.rerun()
+            
+        st.markdown("<hr>", unsafe_allow_html=True)
+        st.markdown("#### Quick Integration Snippets")
+        t1, t2 = st.tabs(["React (MERN)", "Python"])
+        with t1:
+            st.code(f"""// React / Next.js
+import {{ useEffect, useState }} from 'react';
+export default function Gallery() {{
+  const [media, setMedia] = useState([]);
+  useEffect(() => {{ fetch('{endpoint_url}').then(r=>r.text()).then(t=>console.log(t)) }}, []);
+}}""", language="javascript")
+        with t2:
+            st.code(f"""import requests\nresp = requests.get('{endpoint_url}')""", language="python")
 
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
@@ -473,11 +513,19 @@ def move_media_dialog(file_id_str):
     try:
         fid = ObjectId(file_id_str)
         file = files_col.find_one({"_id": fid})
-    except Exception: st.rerun()
+        if not file:
+            st.error("File not found")
+            if st.button("Close"): st.rerun()
+            return
+    except Exception:
+        st.rerun()
+
     folders = list(folders_col.find({"username": st.session_state.username}))
     folder_options = {f["folder_name"] + (" (Home)" if f["folder_name"]=="root" else "") : f["_id"] for f in folders}
+
     st.write(f"Moving: **{html.escape(file.get('filename', 'Media Item'))}**")
     selected_folder_name = st.selectbox("Select destination album:", list(folder_options.keys()))
+
     c1, c2 = st.columns(2)
     if c1.button("Move File", type="primary", use_container_width=True):
         new_folder_id = folder_options[selected_folder_name]
@@ -504,6 +552,7 @@ def find_duplicates_dialog(folder_id):
             files_in_folder = list(files_col.find({"folder_id": folder_id}))
             hashes = {}
             duplicates_to_delete = []
+
             for f in files_in_folder:
                 try:
                     response = requests.get(f["url"])
@@ -513,12 +562,15 @@ def find_duplicates_dialog(folder_id):
                             duplicates_to_delete.append(f)
                         else:
                             hashes[file_hash] = f
-                except Exception: pass
+                except Exception:
+                    pass
+
             if duplicates_to_delete:
                 for df in duplicates_to_delete:
                     if files_col.count_documents({"public_id": df["public_id"]}) <= 1:
                         cloudinary.uploader.destroy(df["public_id"], resource_type=df["resource_type"])
                     files_col.delete_one({"_id": df["_id"]})
+                
                 st.success(f"Cleaned up! Found and removed {len(duplicates_to_delete)} duplicate files.")
                 time.sleep(2.5)
                 st.rerun()
@@ -610,6 +662,7 @@ def render_preview_shared_overlay(notif_id_str):
 
     try: notif_oid = ObjectId(notif_id_str)
     except InvalidId: st.stop()
+
     notif = notifications_col.find_one({"_id": notif_oid})
     if not notif: st.stop()
 
@@ -639,6 +692,7 @@ def render_preview_shared_overlay(notif_id_str):
             st.rerun()
         st.stop()
 
+    # Standard Share Review
     share = shares_col.find_one({"_id": notif.get("share_id")})
     media_ids = share.get("media_ids", []) if share else []
     if not media_ids:
@@ -750,7 +804,7 @@ def render_profile_hub_overlay():
             st.write("Force a deep re-scan of ALL media using the core AI Protection rules.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Analyzing all media with Contextual AI..."):
+                with st.spinner("Analyzing all media with core trained AI..."):
                     updated_count = 0
                     
                     for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
@@ -916,7 +970,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
 
     blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
     
-    # THE REVEAL BUTTON NOW PERMANENTLY UNFLAGS THE IMAGE IN THE DB
+    # PERMANENT OVERRIDE BUTTON
     reveal_btn = f"<a href='{get_nav_link(page='app', folder=safe_folder_id, action='unflag', file_id=fid)}' target='_self' style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5); text-decoration:none;'>👁️ Reveal & Mark as Safe</a>" if is_flagged else ""
 
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
@@ -924,6 +978,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
+    # DYNAMIC MENU: Includes restored permanent Safe/Sensitive overrides
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -1415,6 +1470,9 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     st.markdown(header_html.replace('\n', ''), unsafe_allow_html=True)
     st.write("<br>", unsafe_allow_html=True) 
 
+    # VISUAL WARNING IF AI CRASHES / OFFLINE
+    if safety_model is None:
+        st.error("🚨 AI MODEL OFFLINE: 'custom_nsfw_model.h5' could not be loaded. Ensure the exact file is uploaded via Git LFS to your GitHub repository and is not corrupted. The filter is currently bypassed.")
     
     if is_root and st.session_state.story_groups:
         st.markdown(f'<h3 style="margin-left: 40px; margin-bottom: 10px;">Stories</h3>', unsafe_allow_html=True)
@@ -1509,10 +1567,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     file_bytes = file.getvalue()
                                     file.seek(0)
                                     
-                                    # FIXED UPLOAD LOGIC: The file is no longer blocked from uploading.
-                                    # If the AI flags it, it just uploads as blurred.
                                     is_flagged = False
-                                    
                                     if r_type == "image":
                                         is_flagged = not is_safe_content(file_bytes, safety_model)
                                         if is_flagged:
