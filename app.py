@@ -84,20 +84,21 @@ def is_safe_content(file_bytes, model):
         # Run Inference
         prediction = model.predict(img_array, verbose=0)
         
-        # Handle different model output structures for robust NSFW detection
+        # FIXED LOGIC: Stop false positives on normal skin/clothing (sarees, dresses, swimwear)
         if prediction.shape[1] == 5:
-            # Common 5-class NSFW model: [drawings, hentai, neutral, porn, sexy]
-            # Summing the explicit/sensitive classes (indices 1, 3, 4)
-            score = prediction[0][1] + prediction[0][3] + prediction[0][4]
+            # Standard 5-class model: [drawings, hentai, neutral, porn, sexy]
+            # We explicitly IGNORE the 'sexy' class (index 4) so normal photos don't get blurred.
+            # We ONLY flag true explicit 18+ content (hentai + porn)
+            explicit_score = prediction[0][1] + prediction[0][3]
+            return explicit_score <= 0.50 # If it's over 50% explicit porn, flag it.
         elif prediction.shape[1] > 1:
             # 2-class model: [safe, nsfw]
             score = prediction[0][1] 
+            return score <= 0.85 # High threshold (85%) to prevent false positives
         else:
             # 1-class model
             score = prediction[0][0]
-        
-        # Stricter Threshold: Dropped from 0.6 to 0.35 to catch "sexy/suggestive" content
-        return score <= 0.35 
+            return score <= 0.85
     except Exception as e:
         print(f"Image processing error: {e}")
         return True 
@@ -628,6 +629,43 @@ def locked_reaction_dialog(remaining_seconds):
     st.info(f"Time remaining: **{hours} hours and {minutes} minutes**")
     if st.button("Got it", use_container_width=True): st.rerun()
 
+# --- NEW: FIND DUPLICATES DIALOG ---
+@st.dialog("🔍 Find & Remove Duplicates")
+def find_duplicates_dialog(folder_id):
+    st.write("This tool will scan the current album for exact duplicate images. It will keep one original and permanently delete the rest.")
+    if st.button("Start Scan", type="primary", use_container_width=True):
+        with st.spinner("Scanning album for duplicates... this may take a moment."):
+            files_in_folder = list(files_col.find({"folder_id": folder_id}))
+            hashes = {}
+            duplicates_to_delete = []
+
+            # Hash comparison to find exact matches
+            for f in files_in_folder:
+                try:
+                    response = requests.get(f["url"])
+                    if response.status_code == 200:
+                        file_hash = hashlib.md5(response.content).hexdigest()
+                        if file_hash in hashes:
+                            duplicates_to_delete.append(f)
+                        else:
+                            hashes[file_hash] = f
+                except Exception:
+                    pass
+
+            if duplicates_to_delete:
+                for df in duplicates_to_delete:
+                    if files_col.count_documents({"public_id": df["public_id"]}) <= 1:
+                        cloudinary.uploader.destroy(df["public_id"], resource_type=df["resource_type"])
+                    files_col.delete_one({"_id": df["_id"]})
+                
+                st.success(f"Cleaned up! Found and removed {len(duplicates_to_delete)} duplicate files.")
+                time.sleep(2.5)
+                st.rerun()
+            else:
+                st.info("No duplicates found in this album! Everything looks clean.")
+                time.sleep(2.5)
+                st.rerun()
+
 # ==========================================
 # 10. MUTEX FULL-SCREEN OVERLAYS
 # ==========================================
@@ -854,7 +892,6 @@ def render_profile_hub_overlay():
             if st.button("🔍 Scan Vault for Sensitive Content", use_container_width=True):
                 with st.spinner("Downloading and analyzing all media. This may take a moment..."):
                     updated_count = 0
-                    # Modfied to scan ALL images, not just unflagged ones, to retroactively apply the stricter AI rules
                     for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
                         try:
                             resp = requests.get(f["url"], timeout=5)
@@ -1585,6 +1622,11 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.markdown("**Album Management**")
                     if st.button("✏️ Rename Album", key=f"edit_{current['_id']}", use_container_width=True): rename_folder_dialog(current["_id"], current["folder_name"])
                     if st.button("🗑 Delete Album", key=f"del_fold_{current['_id']}", use_container_width=True): delete_folder_dialog(current["_id"], current["folder_name"])
+                    
+                    # --- NEW: FIND DUPLICATES BUTTON ---
+                    if st.button("🔍 Find & Remove Duplicates", key=f"dup_{current['_id']}", use_container_width=True): 
+                        find_duplicates_dialog(current["_id"])
+                        
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     
                     st.markdown("**Developer & API**")
@@ -1601,14 +1643,17 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     if st.button(lock_btn_txt, key=f"lock_fold_{current['_id']}", use_container_width=True):
                         folders_col.update_one({"_id": current["_id"]}, {"$set": {"is_locked": not is_locked}}); st.rerun()
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-                    st.markdown("**Add Content**")
                     
                     # ----------------------------------------------------
-                    # AI SAFEGUARD INJECTION
+                    # UPDATED UPLOAD LOGIC: WARNING + FORCE OVERRIDE
                     # ----------------------------------------------------
+                    st.markdown("**Add Content**")
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
-                        force_upload = st.checkbox("Allow upload even if flagged as sensitive (Applies Blur)")
+                        
+                        # Explicit Checkbox for 18+ content handling
+                        force_upload = st.checkbox("Force upload sensitive content (Applies Blur automatically)")
+                        
                         submit_button = st.form_submit_button("Sync Files", type="primary", use_container_width=True)
                         if submit_button and uploaded_files:
                             allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm", "video/quicktime"]
@@ -1621,15 +1666,16 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     file.seek(0)
                                     
                                     is_flagged = False
-                                    # Run the AI data protection check on images
+                                    
                                     if r_type == "image":
                                         if not is_safe_content(file_bytes, safety_model):
                                             if force_upload:
-                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged. Forced upload enabled. Blurring.")
+                                                st.warning(f"🚨 '{html.escape(file.name)}' contains 18+ content. Forced upload applied. Image will be blurred in the vault.")
                                                 is_flagged = True
                                             else:
-                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged by Safety AI.")
-                                                continue # Skip to the next file
+                                                # Block upload if they didn't check the force box
+                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' contains 18+ content. Check 'Force upload sensitive content' to bypass and blur.")
+                                                continue 
                                         
                                     try:
                                         res = cloudinary.uploader.upload_large(file, resource_type=r_type, chunk_size=20000000) if file.size > 50000000 else cloudinary.uploader.upload(file, resource_type=r_type)
@@ -1662,7 +1708,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                         html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
-        # Pure Circular Grid (No Action Buttons in grid, only in Lightbox)
+        # Pure Circular Grid
         if files:
             st.write("<br>", unsafe_allow_html=True)
             img_cols = st.columns(4)
@@ -1683,6 +1729,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
                         if is_flagged:
+                            # Blurred state in grid view
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20;">🙈</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
