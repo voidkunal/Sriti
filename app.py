@@ -57,77 +57,51 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# ADVANCED DUAL-PIPELINE PROTECTION ENGINE
+# CUSTOM AI PROTECTION ENGINE (MobileNetV2)
 # ==========================================
 @st.cache_resource(show_spinner=False)
-def load_nsfw_model():
+def load_custom_model():
     try:
-        model = tf.keras.models.load_model('nsfw_model.h5', compile=False)
+        # Load YOUR locally trained custom model
+        model = tf.keras.models.load_model('custom_nsfw_model.h5', compile=False)
         return model
     except Exception as e:
-        print(f"Failed to load AI protection model: {e}")
+        print(f"Failed to load custom AI model: {e}")
         return None
 
-safety_model = load_nsfw_model()
+safety_model = load_custom_model()
 
 def is_safe_content(file_bytes, model):
+    if model is None:
+        return True # Fail-safe: Allow upload if model is missing
+    
     try:
-        # Preprocess the image
+        # 1. Standardize image exactly how it was trained in your Colab script
         img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
-        img_resized = img.resize((224, 224), Image.Resampling.BILINEAR)
-        img_array = np.array(img_resized, dtype=np.float32)
+        img = img.resize((224, 224), Image.Resampling.BILINEAR)
         
-        is_nsfw = False
+        # Normalize strictly to [0, 1]
+        img_array = np.array(img, dtype=np.float32) / 255.0
+        img_array = np.expand_dims(img_array, axis=0)
         
-        # --- PIPELINE 1: DEEP LEARNING (CNN) ---
-        if model is not None:
-            try:
-                norm_array = np.expand_dims(img_array / 255.0, axis=0)
-                prediction = model.predict(norm_array, verbose=0)[0]
-                
-                if len(prediction) == 5:
-                    # [drawings, hentai, neutral, porn, sexy]
-                    if prediction[1] >= 0.15 or prediction[3] >= 0.15 or prediction[4] >= 0.15:
-                        is_nsfw = True
-                elif len(prediction) >= 2:
-                    if prediction[1] >= 0.15:
-                        is_nsfw = True
-                elif len(prediction) == 1:
-                    if prediction[0] >= 0.15:
-                        is_nsfw = True
-            except:
-                pass # If CNN fails, fallback to Pipeline 2 silently
-                
-        # --- PIPELINE 2: MATHEMATICAL PIXEL HEURISTIC (Skin Detection) ---
-        # If the Deep Learning model is biased and missed it, this aggressive scanner catches it.
-        # It calculates the exact percentage of exposed human skin in the image.
-        if not is_nsfw:
-            r = img_array[:, :, 0]
-            g = img_array[:, :, 1]
-            b = img_array[:, :, 2]
+        # 2. Run Inference through your custom weights
+        prediction = model.predict(img_array, verbose=0)[0]
+        
+        # 3. Strict Classification Logic
+        # Assuming alphabetical mapping: 0 = 'nsfw', 1 = 'safe'
+        # (If it blurs the wrong things, change this to prediction[1])
+        nsfw_score = prediction[0] 
+        
+        # HYPER-STRICT THRESHOLD: 15% (0.15)
+        # If your AI detects even a 15% match to the NSFW data you trained it on, FLAG IT.
+        if nsfw_score >= 0.15:
+            return False # False = Not Safe (Triggers Blur)
             
-            max_rgb = np.maximum(r, np.maximum(g, b))
-            min_rgb = np.minimum(r, np.minimum(g, b))
-            
-            # Standard bounds for skin tones under varied lighting
-            rule1 = (r > 95) & (g > 40) & (b > 20)
-            rule2 = (max_rgb - min_rgb) > 15
-            rule3 = np.abs(r - g) > 15
-            rule4 = (r > g) & (r > b)
-            
-            skin_mask = rule1 & rule2 & rule3 & rule4
-            skin_percentage = np.sum(skin_mask) / (224 * 224)
-            
-            # If more than 22% of the image is exposed skin, flag it as suggestive.
-            # This aggressively targets swimwear, lingerie, and close-up body shots.
-            if skin_percentage > 0.22:
-                is_nsfw = True
-
-        return not is_nsfw
+        return True # True = Safe
 
     except Exception as e:
-        print(f"AI Processing Error: {e}")
-        return True # Do not crash upload if image is corrupted
+        print(f"Custom AI Processing Error: {e}")
+        return True
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -795,7 +769,7 @@ def render_preview_shared_overlay(notif_id_str):
                     st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
                 else:
                     vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                    st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', unsafe_allow_html=True))
+                    st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
                 st.markdown('</div><br>', unsafe_allow_html=True)
 
         if st.button("Mark as Read & Close", use_container_width=True):
@@ -913,10 +887,10 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Force a deep re-scan of ALL media to apply the latest Dual-Pipeline Protection rules.")
+            st.write("Force a deep re-scan of ALL media to apply the latest Custom AI Protection rules.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing ALL media using CNN + Mathematical Pixel Analysis..."):
+                with st.spinner("Downloading and analyzing ALL media using Custom AI..."):
                     updated_count = 0
                     
                     # Force scan every single image in the user's account
@@ -1564,7 +1538,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     is_root = current is None or current.get("parent_id") is None
 
     # --- AUTO-SCANNER ON BOOT ---
-    # Automatically triggers when the user loads the dashboard and finds unscanned files
     unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
         with st.spinner("🤖 Auto-scanning new or unchecked media for safety..."):
@@ -1639,7 +1612,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
         folders = list(folders_col.find({"username": st.session_state.username, "parent_id": actual_folder_id}))
         files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
         
-        # Sort files so pinned items appear first
         pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0), reverse=True)
         unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
         files = pinned_files + unpinned_files
@@ -1688,9 +1660,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     
                     st.markdown("**Add Content**")
-                    # ----------------------------------------------------
-                    # UPLOAD SCANNING LOGIC
-                    # ----------------------------------------------------
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
                         
@@ -1709,14 +1678,13 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     
                                     is_flagged = False
                                     
-                                    # Scans image directly during upload process
                                     if r_type == "image":
                                         if not is_safe_content(file_bytes, safety_model):
                                             if force_upload:
-                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged as Suggestive/18+. Forced upload applied. Blurring in vault.")
+                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged. Forced upload applied. Blurring in vault.")
                                                 is_flagged = True
                                             else:
-                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged as Suggestive/18+. Check 'Force upload' to bypass and blur.")
+                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged. Check 'Force upload' to bypass and blur.")
                                                 continue 
                                         
                                     try:
@@ -1733,7 +1701,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
         if not folders and not files:
             st.markdown('<p class="muted-text" style="text-align:center; margin-top: 50px;">This album is empty.</p>', unsafe_allow_html=True)
 
-        # Folders Render
         if folders:
             f_cols = st.columns(4)
             for i, folder in enumerate(folders):
@@ -1749,7 +1716,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                         html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
-        # Pure Circular Grid
         if files:
             st.write("<br>", unsafe_allow_html=True)
             img_cols = st.columns(4)
@@ -1782,3 +1748,140 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.markdown('</div>', unsafe_allow_html=True)
                     
         st.markdown('<div class="custom-footer">© 2026 voidememo. All rights reserved.</div>', unsafe_allow_html=True)
+
+def render_profile_hub_overlay():
+    st.markdown("<style>header {display: none;} .block-container {padding: 3rem 5% !important; max-width: 100vw;}</style>", unsafe_allow_html=True)
+    
+    user_data = users_col.find_one({"username": st.session_state.username})
+    
+    c1, c2 = st.columns([10, 1])
+    c1.markdown('<div class="dashboard-title" style="margin-bottom: 20px;">Profile Hub</div>', unsafe_allow_html=True)
+    if c2.button("✕", key="close_hub_overlay"):
+        del st.query_params["profile_hub"]
+        st.rerun()
+
+    p_tab1, p_tab2, p_tab3 = st.tabs(["⚙️ Settings", "🔔 Notifications", "👥 Switch Profiles"])
+    
+    with p_tab1:
+        c1, c2 = st.columns([1.5, 1], gap="large")
+        with c1:
+            st.markdown("### Profile Settings")
+            new_username = st.text_input("Username", value=user_data.get("username", ""))
+            new_pin = st.text_input("PIN / Zip Code", value=user_data.get("pin_code", ""))
+            new_email = st.text_input("Email", value=user_data.get("email", ""), disabled=True)
+            new_phone = st.text_input("Phone Number", value=user_data.get("phone_number", ""))
+            bio = st.text_area("Bio", value=user_data.get("bio", ""))
+            pic = st.file_uploader("Profile Photo", key="profile_pic_upload")
+            
+            if st.button("Save Changes", type="primary"):
+                updates = {"bio": html.escape(str(bio).strip()), "pin_code": html.escape(str(new_pin).strip()), "phone_number": html.escape(str(new_phone).strip())}
+                if pic:
+                    res = cloudinary.uploader.upload(pic)
+                    updates["profile_photo"] = res["secure_url"]
+                    
+                clean_username = html.escape(str(new_username).strip())
+                if clean_username != st.session_state.username:
+                    if users_col.find_one({"username": clean_username}): st.error("Username already taken.")
+                    else:
+                        updates["username"] = clean_username
+                        users_col.update_one({"username": st.session_state.username}, {"$set": updates})
+                        folders_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
+                        files_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
+                        st.session_state.username = clean_username
+                        st.success("Profile Updated!"); time.sleep(1); st.rerun()
+                else:
+                    users_col.update_one({"username": st.session_state.username}, {"$set": updates})
+                    st.success("Profile Updated!"); time.sleep(1); st.rerun()
+            
+            st.markdown("<hr>", unsafe_allow_html=True)
+            st.markdown("### Safety Controls")
+            st.write("Force a deep re-scan of ALL media to apply the latest Custom AI Protection rules.")
+            
+            if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
+                with st.spinner("Downloading and analyzing ALL media using Custom AI..."):
+                    updated_count = 0
+                    
+                    # Force scan every single image in the user's account
+                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
+                        try:
+                            resp = requests.get(f["url"], timeout=5)
+                            if resp.status_code == 200:
+                                safe = is_safe_content(resp.content, safety_model)
+                                files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
+                                updated_count += 1
+                        except Exception: pass
+                        
+                    st.success(f"Deep scan complete! Re-evaluated {updated_count} files.")
+
+        with c2:
+            st.markdown("### Reaction Analytics")
+            pipeline = [{"$match": {"username": st.session_state.username, "tag": {"$ne": ""}}}, {"$group": {"_id": "$tag", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 4}]
+            stats = list(files_col.aggregate(pipeline))
+            if stats:
+                scols = st.columns(2)
+                for i, stat in enumerate(stats): scols[i % 2].metric(label="React", value=html.escape(stat["_id"]), delta=f"{stat['count']} times")
+            else: st.info("You haven't reacted to any memories yet!")
+                
+            st.markdown("<hr style='margin: 30px 0;'>", unsafe_allow_html=True)
+            if st.button("🚪 Logout Complete Session", use_container_width=True):
+                users_col.update_one({"username": st.session_state.username}, {"$set": {"session_token": ""}})
+                st.session_state.logged_in = False; st.session_state.username = ""
+                st.query_params.clear(); st.rerun()
+
+    with p_tab2:
+        if st.query_params.get("confirm_all_read", "").lower() == "true":
+             notifications_col.update_many({"username": st.session_state.username}, {"$set": {"is_read": True}})
+             st.query_params.pop("confirm_all_read", None)
+             st.success("All read!"); time.sleep(1); st.rerun()
+
+        if st.query_params.get("confirm_clear_all", "").lower() == "true":
+             notifications_col.delete_many({"username": st.session_state.username})
+             st.query_params.pop("confirm_clear_all", None)
+             st.success("All cleared!"); time.sleep(1); st.rerun()
+
+        st.markdown("### Your Notifications")
+        ca, cb = st.columns(2)
+        if ca.button("✔️ Mark All Read", use_container_width=True):
+            st.query_params["confirm_all_read"] = "true"; st.rerun()
+        if cb.button("🗑️ Clear All", use_container_width=True):
+            st.query_params["confirm_clear_all"] = "true"; st.rerun()
+            
+        st.markdown("<hr style='margin: 15px 0; border-color: var(--border);'>", unsafe_allow_html=True)
+
+        notifs = list(notifications_col.find({"username": st.session_state.username}).sort("created_at", -1))
+        if not notifs: st.info("You have no notifications.")
+        else:
+            for n in notifs:
+                col_msg, col_del = st.columns([11, 1], vertical_alignment="center")
+                status = "🟢" if not n.get("is_read") else "⚪"
+                t_ago = time_ago(n.get("created_at", time.time()))
+                
+                with col_msg:
+                    label = f"{status} [{t_ago}] {html.escape(n['sender'])} {n['message']}"
+                    if st.button(label, key=f"nbtn_{n['_id']}", use_container_width=True):
+                        notifications_col.update_one({"_id": n['_id']}, {"$set": {"is_read": True}})
+                        if n.get("type") in ["share", "share_reaction"]: 
+                            st.query_params["preview_notif"] = str(n['_id'])
+                            del st.query_params["profile_hub"]
+                        st.rerun()
+                with col_del:
+                    if st.button("❌", key=f"deln_{n['_id']}", help="Delete notification"):
+                        notifications_col.delete_one({"_id": n['_id']})
+                        st.rerun()
+
+    with p_tab3:
+        siblings = list(users_col.find({"email": user_data["email"]}))
+        st.markdown(f"### Linked Accounts ({len(siblings)}/5)")
+        for sib in siblings:
+            if sib["username"] == st.session_state.username: st.success(f"👤 {html.escape(sib['username'])} (Active)")
+            else:
+                if st.button(f"🔄 Switch to {html.escape(sib['username'])}", key=f"sw_{sib['_id']}", use_container_width=True):
+                    token = str(uuid.uuid4())
+                    users_col.update_one({"username": sib["username"]}, {"$set": {"session_token": token}})
+                    st.session_state.username = sib["username"]
+                    st.query_params["session"] = token
+                    del st.query_params["profile_hub"]; st.rerun()
+                    
+        if len(siblings) < 5:
+            st.info("You can create up to 5 profiles using this email. Create a new account via the signup page using this email address.")
+    st.stop()
