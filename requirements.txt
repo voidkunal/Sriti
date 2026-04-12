@@ -7,3 +7,4 @@ tensorflow-cpu
 Pillow
 numpy
 requests
+opencv-python-headless

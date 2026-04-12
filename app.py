@@ -20,7 +20,8 @@ import json
 import io
 import requests
 
-# ML Libraries for Data Protection Model
+# ML & Computer Vision Libraries
+import cv2 
 import tensorflow as tf
 from PIL import Image
 import numpy as np
@@ -30,34 +31,20 @@ import numpy as np
 # ==========================================
 st.set_page_config(page_title="voidememo Vault", page_icon="🌐", layout="wide", initial_sidebar_state="collapsed")
 
-# ABSOLUTE VIEWPORT RESET: Kills the hidden sidebar space pushing content off-center
 st.markdown("""
 <style>
-    /* Nuke Streamlit's sidebar and collapse control */
     [data-testid="stSidebar"], [data-testid="stSidebarNav"], [data-testid="collapsedControl"] { 
-        display: none !important; 
-        width: 0 !important; 
-        min-width: 0 !important; 
-        margin: 0 !important;
-        padding: 0 !important;
+        display: none !important; width: 0 !important; min-width: 0 !important; margin: 0 !important; padding: 0 !important;
     }
-    
-    /* Force the core app container to exactly 100% width with 0 offset */
     .stApp, [data-testid="stAppViewContainer"], .main {
-        width: 100vw !important;
-        max-width: 100vw !important;
-        margin-left: 0 !important;
-        padding-left: 0 !important;
-        padding-right: 0 !important;
-        left: 0 !important;
+        width: 100vw !important; max-width: 100vw !important; margin-left: 0 !important; padding-left: 0 !important; padding-right: 0 !important; left: 0 !important;
     }
-    
     header[data-testid="stHeader"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# ADVANCED DUAL-PIPELINE PROTECTION ENGINE
+# ADVANCED 3-LAYER CONTEXTUAL AI ENGINE
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
@@ -65,50 +52,96 @@ def load_nsfw_model():
         model = tf.keras.models.load_model('custom_nsfw_model.h5', compile=False)
         return model
     except Exception as e:
-        print(f"Failed to load AI protection model: {e}")
+        print(f"Failed to load AI model: {e}")
         return None
 
+@st.cache_resource(show_spinner=False)
+def load_face_cascade():
+    return cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
 safety_model = load_nsfw_model()
+face_cascade = load_face_cascade()
 
 def is_safe_content(file_bytes, model):
     try:
-        # Preprocess the image
-        img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
-        img_resized = img.resize((224, 224), Image.Resampling.BILINEAR)
-        img_array = np.array(img_resized, dtype=np.float32)
+        # 1. Image Preparation
+        img_bytes = io.BytesIO(file_bytes)
+        pil_img = Image.open(img_bytes).convert('RGB')
+        img_array = np.array(pil_img)
         
-        is_nsfw = False
+        is_portrait = False
+        skin_ratio = 0.0
         
-        # --- PIPELINE 1: DEEP LEARNING (CNN) ---
-        if model is not None:
-            try:
-                norm_array = np.expand_dims(img_array / 255.0, axis=0)
-                prediction = model.predict(norm_array, verbose=0)[0]
-                
-                # OPTIMIZED: Much higher thresholds (85%-95%) to stop false positives on normal photos
-                if len(prediction) == 5:
-                    # Classes: [drawings, hentai, neutral, porn, sexy]
-                    if prediction[1] >= 0.85 or prediction[3] >= 0.85 or prediction[4] >= 0.95:
-                        is_nsfw = True
-                elif len(prediction) >= 2:
-                    if prediction[1] >= 0.85:
-                        is_nsfw = True
-                elif len(prediction) == 1:
-                    if prediction[0] >= 0.85:
-                        is_nsfw = True
-            except Exception as e:
-                print("CNN Prediction failed:", e)
-                pass 
-                
-        # NOTE: The mathematical skin-pixel detector has been completely removed. 
-        # It was falsely triggering on normal portraits, selfies, and sketches. 
-        # We now rely exclusively on the AI model + manual user overrides.
+        # --- LAYER 1: SEMANTIC CONTEXT (Computer Vision) ---
+        try:
+            cv_img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            
+            # A. Highly Accurate YCrCb Skin Detection
+            ycrcb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2YCrCb)
+            lower_skin = np.array([0, 133, 77], dtype=np.uint8)
+            upper_skin = np.array([255, 173, 127], dtype=np.uint8)
+            skin_mask = cv2.inRange(ycrcb, lower_skin, upper_skin)
+            
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel)
+            skin_ratio = np.sum(skin_mask > 0) / (cv_img.shape[0] * cv_img.shape[1])
+            
+            # B. Face Detection (Is this a Selfie/Portrait?)
+            gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+            
+            if len(faces) > 0:
+                max_face_area = max([w * h for (x, y, w, h) in faces])
+                img_area = cv_img.shape[0] * cv_img.shape[1]
+                if (max_face_area / img_area) > 0.015: # Face is prominent
+                    is_portrait = True
+        except Exception as e:
+            print(f"CV Context failed (continuing to base CNN): {e}")
 
+        # --- LAYER 2: DYNAMIC THRESHOLD CALCULATOR ---
+        # Default balanced thresholds
+        p_thresh = 0.65
+        s_thresh = 0.75
+        h_thresh = 0.70
+        
+        if is_portrait:
+            # CONTEXT: It's a verified portrait/selfie. 
+            # We RELAX the rules to prevent false blocking of normal faces/shoulders.
+            p_thresh = 0.90
+            s_thresh = 0.92
+            h_thresh = 0.88
+        elif skin_ratio > 0.30:
+            # CONTEXT: High skin ratio but NO prominent face detected. High risk of suggestive content.
+            # We TIGHTEN the rules.
+            p_thresh = 0.45
+            s_thresh = 0.55
+            h_thresh = 0.50
+
+        # --- LAYER 3: DEEP LEARNING INFERENCE ---
+        is_nsfw = False
+        if model is not None:
+            img_resized = pil_img.resize((224, 224), Image.Resampling.BILINEAR)
+            norm_array = np.expand_dims(np.array(img_resized, dtype=np.float32) / 255.0, axis=0)
+            
+            prediction = model.predict(norm_array, verbose=0)[0]
+            
+            if len(prediction) == 5:
+                # Classes: [drawings, hentai, neutral, porn, sexy]
+                hentai_score = prediction[1]
+                porn_score = prediction[3]
+                sexy_score = prediction[4]
+                
+                if porn_score >= p_thresh or sexy_score >= s_thresh or hentai_score >= h_thresh:
+                    is_nsfw = True
+            else:
+                if np.max(prediction) >= 0.80:
+                    is_nsfw = True
+                    
         return not is_nsfw
 
     except Exception as e:
-        print(f"AI Processing Error: {e}")
-        return True # Do not crash upload if image is corrupted
+        print(f"AI Pipeline Critical Error: {e}")
+        return True # Fail-safe allows upload if code crashes
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -376,9 +409,8 @@ if st.session_state.logged_in:
                     folders_col.update_one({"_id": file["folder_id"]}, {"$set": {"cover_photo": url}})
                 elif action == "share":
                     st.session_state.pending_share = str(fid)
-                # ==========================================
-                # NEW PERMANENT OVERRIDE ACTIONS
-                # ==========================================
+                
+                # --- RESTORED MANUAL OVERRIDE CONTROLS ---
                 elif action == "unflag":
                     files_col.update_one({"_id": fid}, {"$set": {"is_flagged": False}})
                 elif action == "flag":
@@ -388,7 +420,7 @@ if st.session_state.logged_in:
         
         del st.query_params["action"]
         del st.query_params["file_id"]
-        # Keep lightbox index so the user stays on the same image after toggling safety flag
+        # Maintain Lightbox state after pressing a manual override button
         st.rerun()
 
     if "react" in st.query_params:
@@ -461,7 +493,7 @@ def developer_api_dialog(folder_id_str):
     folder = folders_col.find_one({"_id": fid})
     
     st.markdown("### Read-Only API Integration")
-    st.write("Generate a REST endpoint to safely embed this album's media on your external website, portfolio, or app. (Uploads remain secured on voidememo).")
+    st.write("Generate a REST endpoint to safely embed this album's media on your external website, portfolio, or app.")
     
     has_api = folder.get("api_enabled", False)
     api_key = folder.get("api_key", "")
@@ -475,7 +507,6 @@ def developer_api_dialog(folder_id_str):
         st.success("✅ API is Currently Active" if has_api else "⏸️ API is Currently Paused")
         
         endpoint_url = f"https://voidmemo.streamlit.app/?embed=true&api_key={api_key}" 
-        
         st.text_input("Your Secret API Endpoint URL:", value=endpoint_url, disabled=True)
         
         toggle_text = "Pause API Access" if has_api else "Resume API Access"
@@ -489,7 +520,6 @@ def developer_api_dialog(folder_id_str):
         
         with t1:
             st.code(f"""<div id="voidememo-gallery"></div>
-
 <script>
 fetch('{endpoint_url}')
   .then(response => response.text())
@@ -498,7 +528,6 @@ fetch('{endpoint_url}')
      const doc = parser.parseFromString(htmlText, 'text/html');
      const data = JSON.parse(doc.getElementById('voidememo-api-data').innerText);
      const gallery = document.getElementById('voidememo-gallery');
-     
      data.data.forEach(item => {{
         const el = item.resource_type === 'image' 
             ? `<img src="${{item.url}}" style="width:200px;">` 
@@ -512,10 +541,8 @@ fetch('{endpoint_url}')
         with t2:
             st.code(f"""// React / Next.js Implementation
 import {{ useEffect, useState }} from 'react';
-
 export default function AlbumGallery() {{
   const [media, setMedia] = useState([]);
-
   useEffect(() => {{
     fetch('{endpoint_url}')
       .then(res => res.text())
@@ -543,9 +570,7 @@ export default function AlbumGallery() {{
 import requests
 from bs4 import BeautifulSoup
 import json
-
 API_URL = "{endpoint_url}"
-
 def get_album_media():
     response = requests.get(API_URL)
     if response.status_code == 200:
@@ -560,9 +585,6 @@ def get_album_media():
 for media in get_album_media():
     print(f"File: {{media['filename']}} | Link: {{media['url']}}")
 """, language="python")
-
-        st.warning("⚠️ Keep your API URL private. Anyone with this endpoint can view the media inside this specific album.")
-
 
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
@@ -894,10 +916,9 @@ def render_profile_hub_overlay():
             st.write("Force a deep re-scan of ALL media to apply the latest Dual-Pipeline Protection rules.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing ALL media using CNN..."):
+                with st.spinner("Downloading and analyzing ALL media using 3-Layer CV Semantic Engine..."):
                     updated_count = 0
                     
-                    # Force scan every single image in the user's account
                     for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
                         try:
                             resp = requests.get(f["url"], timeout=5)
@@ -1061,7 +1082,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
 
     blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
     
-    # Keeps the temporary button for quick peeks
+    # Safe temporary reveal for flagged photos
     reveal_btn = f"<button onclick=\"document.getElementById('lb-media').style.filter='none'; document.getElementById('lb-media').style.transform='scale(1)'; this.style.display='none';\" style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5);'>👁️ Reveal Sensitive Content</button>" if is_flagged else ""
 
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
@@ -1069,7 +1090,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # DYNAMIC MENU: Includes permanent Safe/Sensitive overrides
+    # DYNAMIC MENU: Includes restored permanent Safe/Sensitive overrides
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -1080,6 +1101,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="move", file_id=fid)}" target="_self">📂 Move</a>
     '''
     
+    # RESTORED OVERRIDE BUTTONS
     if is_flagged:
         action_html += f'<a href="{get_nav_link(page="app", folder=safe_folder_id, action="unflag", file_id=fid)}" target="_self" style="color: #34d399; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 12px 12px;">✅ Mark as Safe</a>'
     else:
@@ -1195,6 +1217,7 @@ if not st.session_state.logged_in:
         st.query_params["page"] = "landing"
         st.rerun()
 
+    # Z-index strictly 0, pointer events none.
     wallpaper_html = '''
     <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; overflow: hidden; background: #000; pointer-events: none;">
         <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
@@ -1294,34 +1317,7 @@ div[data-testid="stAppViewBlockContainer"]::before {
             st.markdown("<p style='color: #aaa;'>Effective Date: April 2026</p><hr style='border-color: rgba(255,255,255,0.2);'>", unsafe_allow_html=True)
             st.markdown("""
             ### 1. Introduction and Core Philosophy
-            Welcome to voidememo, an advanced digital bibliotheca designed for the secure storage, organization, and sharing of personal media. Our core philosophy is built upon the premise of "Minimalist Security." This document explicitly outlines our data handling procedures, storage architecture, and the mechanics of user interactions.
-            
-            ### 2. Account Generation and Authentication Security
-            **Multi-Profile Architecture:** To accommodate distinct operational silos, voidememo allows a single verified email address to host up to 5 distinct user profiles. To prevent abuse, any profile created after the primary account requires mandatory phone number validation.
-            
-            **OTP-Based Access:** We have deprecated traditional static passwords in favor of dynamic Time-Based One-Time Passwords (OTP). When a login attempt is made, a secure 6-digit code is generated via cryptographically secure random number generators (CSPRNG) and dispatched to the registered email. This token carries a strict 10-minute Time-To-Live (TTL).
-            
-            ### 3. Database Architecture (MongoDB)
-            Your metadata—including folder hierarchies, file reference tags, pin sequencing, and notification ledgers—is structured within a NoSQL MongoDB Atlas cluster. Data transmitted between your client and our MongoDB instances is encrypted in transit using TLS 1.3 protocols.
-
-            ### 4. Media Hosting & Delivery (Cloudinary)
-            voidememo does not store physical image or video files on its application servers. We utilize the Cloudinary Enterprise API for optimized media asset management.
-            * **Uploads:** Media is uploaded via secure, signed POST requests. Files exceeding 50MB utilize chunked, multipart uploading.
-            * **Optimization:** Videos are automatically transcoded to highly efficient web formats (webm/mp4) and served via global Content Delivery Networks (CDNs).
-            * **Destruction:** When a user deletes a file, the application issues an irreversible `destroy` command to the API, wiping the asset from the global CDN nodes.
-
-            ### 5. Dynamic Stories & Reaction Mechanics
-            Our platform features a deterministic, time-seeded Story engine.
-            * **Aggregation:** The engine categorizes media into distinct arrays. Any media item tagged with a user reaction is monitored via a Unix timestamp. If the reaction occurred more than 7 days ago, it is aggregated into the "Previous week's favs ⭐" story ring.
-            * **24-Hour Lock Protocol:** To enforce intentional engagement, once a reaction is cast on a memory, the database lock that specific `_id` from further modification for exactly 86,400 seconds (24 hours). 
-
-            ### 6. Encrypted P2P Sharing Network
-            voidememo allows intra-network media sharing through a batch-processing engine.
-            * **Proximity Discovery:** Users can identify nearby peers by querying the `users` collection for matching `pin_code` variables. 
-            * **Share Ledger:** When a batch of media is shared, the files are not duplicated. Instead, a lightweight transaction document is created mapping an array of media Object IDs to the receiver. 
-
-            ### 7. AI Assistant Data Exposure
-            The integrated Vault Assistant is a constrained logic parser, not a generalized Large Language Model (LLM). It operates entirely locally within the application routing tree. No personal images or chat history are ever transmitted to third-party AI inference servers.
+            Welcome to voidememo. This document explicitly outlines our data handling procedures, storage architecture, and the mechanics of user interactions.
             """)
 
         elif auth_view == "login":
@@ -1453,15 +1449,8 @@ else:
 .stApp, [data-testid="stAppViewContainer"] { background-color: var(--bg-app) !important; color: var(--text-primary) !important; }
 p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
 
-/* Dashboard layout reset */
 div[data-testid="stAppViewBlockContainer"] { 
-    max-width: 100vw !important; 
-    padding: 20px 5% 80px 5% !important; 
-    margin: 0 !important; 
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    backdrop-filter: none !important;
+    max-width: 100vw !important; padding: 20px 5% 80px 5% !important; margin: 0 !important; background: transparent !important; border: none !important; box-shadow: none !important; backdrop-filter: none !important;
 }
 div[data-testid="stAppViewBlockContainer"]::before { display: none !important; content: none !important; }
 
@@ -1502,7 +1491,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     inject_dashboard_css()
 
-    # --- EXCLUSIVE DIALOG ROUTING (Mutex) ---
     dialog_rendered = False
 
     if "share_folder" in st.query_params and not dialog_rendered: 
@@ -1524,7 +1512,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
         render_lightbox_fullscreen(int(st.query_params["lightbox_idx"]), st.query_params.get("folder", "root"))
         dialog_rendered = True
     
-    # Action Integrations
     if st.session_state.get("pending_share") and not dialog_rendered:
         render_share_media_overlay(st.session_state.pending_share, mode="single")
         st.session_state.pending_share = None
@@ -1557,10 +1544,9 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     current = folders_col.find_one({"_id": actual_folder_id})
     is_root = current is None or current.get("parent_id") is None
 
-    # --- AUTO-SCANNER ON BOOT ---
     unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
-        with st.spinner("🤖 Auto-scanning new or unchecked media for safety..."):
+        with st.spinner("🤖 Auto-scanning media with 3-Layer Contextual AI..."):
             for f in unscanned_files:
                 try:
                     resp = requests.get(f["url"], timeout=5)
@@ -1571,7 +1557,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     pass
             st.rerun()
 
-    # --- PERFECT TOP NAV ---
     prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
     display_name = html.escape(user_data.get("first_name", st.session_state.username))
     
@@ -1598,7 +1583,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     st.markdown(header_html.replace('\n', ''), unsafe_allow_html=True)
     st.write("<br>", unsafe_allow_html=True) 
 
-    # ================= MAIN AREA (DRIVE) =================
     
     if is_root and st.session_state.story_groups:
         st.markdown(f'<h3 style="margin-left: 40px; margin-bottom: 10px;">Stories</h3>', unsafe_allow_html=True)
@@ -1623,7 +1607,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
         st.markdown(story_html.replace('\n', ''), unsafe_allow_html=True)
         st.write("<br>", unsafe_allow_html=True)
 
-    # ---------------- ALBUM HEADER & OPTIONS ----------------
     title_text = "Personal Albums" if is_root else html.escape(current["folder_name"])
     if not is_root and current.get("is_locked"): title_text += " 🔒"
 
@@ -1632,7 +1615,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
         folders = list(folders_col.find({"username": st.session_state.username, "parent_id": actual_folder_id}))
         files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
         
-        # Sort files so pinned items appear first
         pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0), reverse=True)
         unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
         files = pinned_files + unpinned_files
@@ -1681,9 +1663,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     
                     st.markdown("**Add Content**")
-                    # ----------------------------------------------------
-                    # STRICT UPLOAD BLOCKING LOGIC
-                    # ----------------------------------------------------
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
                         
@@ -1700,10 +1679,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     
                                     is_flagged = False
                                     
-                                    # Scans image directly during upload process
                                     if r_type == "image":
                                         if not is_safe_content(file_bytes, safety_model):
-                                            # STRICT BLOCK: Completely aborts upload if flagged
                                             st.error(f"🚨 Blocked: '{html.escape(file.name)}' violates safety policies (NSFW/Suggestive content detected). Upload denied.")
                                             continue 
                                         
@@ -1721,7 +1698,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
         if not folders and not files:
             st.markdown('<p class="muted-text" style="text-align:center; margin-top: 50px;">This album is empty.</p>', unsafe_allow_html=True)
 
-        # Folders Render
         if folders:
             f_cols = st.columns(4)
             for i, folder in enumerate(folders):
@@ -1737,7 +1713,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                         html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
-        # Pure Circular Grid
         if files:
             st.write("<br>", unsafe_allow_html=True)
             img_cols = st.columns(4)
@@ -1758,7 +1733,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
                         if is_flagged:
-                            # Blurred state in grid view with monkey closed-eye icon
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
