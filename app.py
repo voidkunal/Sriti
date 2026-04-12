@@ -80,7 +80,6 @@ def is_safe_content(file_bytes, model):
         img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         
         # 1. DYNAMIC SHAPE DETECTION
-        # Automatically adapt to the model's required input size
         try:
             input_layer = model.layers[0]
             expected_shape = input_layer.input_shape
@@ -92,16 +91,10 @@ def is_safe_content(file_bytes, model):
         img = img.resize(target_size)
         img_array = np.array(img, dtype=np.float32)
         
-        # 2. MULTI-NORMALIZATION INFERENCE (The Fix for "False Data")
-        # Generates arrays for the 3 major neural network mathematical formats
-        
-        # Format A: Standard RGB (0 to 1) -> Used by simple CNNs
+        # 2. MULTI-NORMALIZATION INFERENCE
         arr_std = np.expand_dims(img_array / 255.0, axis=0)
-        
-        # Format B: MobileNet/Inception (-1 to 1) -> Used by modern Keras models
         arr_mob = np.expand_dims((img_array / 127.5) - 1.0, axis=0)
         
-        # Format C: VGG/ResNet (BGR Mean Subtraction) -> Used by Caffe/OpenCV ports
         arr_vgg = img_array.copy()
         arr_vgg = arr_vgg[..., ::-1] # RGB to BGR
         arr_vgg[..., 0] -= 103.939
@@ -109,15 +102,12 @@ def is_safe_content(file_bytes, model):
         arr_vgg[..., 2] -= 123.68
         arr_vgg = np.expand_dims(arr_vgg, axis=0)
         
-        # Run inference on all three formats
         preds = [
             model.predict(arr_std, verbose=0)[0],
             model.predict(arr_mob, verbose=0)[0],
             model.predict(arr_vgg, verbose=0)[0]
         ]
         
-        # 3. CONFIDENCE SELECTION
-        # Pick the mathematical result where the AI is most "certain"
         best_pred = None
         highest_confidence = -1
         
@@ -130,27 +120,30 @@ def is_safe_content(file_bytes, model):
         prediction = best_pred
         is_nsfw = False
         
-        # 4. STRICT EXPLICIT TARGETING LOGIC
+        # 3. AGGRESSIVE TARGETING LOGIC (Catching 18+ and Suggestive)
         if len(prediction) == 5:
-            # Standard 5-class model [drawings, hentai, neutral, porn, sexy]
-            porn_score = prediction[3]
+            # [drawings, hentai, neutral, porn, sexy]
             hentai_score = prediction[1]
-            # Strict threshold focusing ONLY on explicit content, ignoring 'sexy' class
-            if (porn_score > 0.65) or (hentai_score > 0.65) or ((porn_score + hentai_score) > 0.75):
+            porn_score = prediction[3]
+            sexy_score = prediction[4]
+            
+            # Aggressive threshold: Combines all explicit/suggestive classes
+            explicit_score = hentai_score + porn_score + sexy_score
+            if explicit_score > 0.40:  # If it's more than 40% suggestive/explicit, FLAG IT.
                 is_nsfw = True
+                
         elif len(prediction) >= 2:
-            # Binary Models [safe, unsafe]
-            if prediction[1] > 0.75:
+            if prediction[1] > 0.40:
                 is_nsfw = True
         elif len(prediction) == 1:
-            if prediction[0] > 0.75:
+            if prediction[0] > 0.40:
                 is_nsfw = True
                 
         return not is_nsfw
 
     except Exception as e:
         print(f"Advanced AI Processing Error: {e}")
-        return True # Do not break the app if the AI logic throws an internal error
+        return True 
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -936,11 +929,11 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Scan all existing media to automatically apply blur protection based on the updated AI model rules.")
+            st.write("Scan all existing media uploaded before the AI Protection Model was activated.")
             if st.button("🔍 Scan Vault for Sensitive Content", use_container_width=True):
-                with st.spinner("Downloading and analyzing all media. This may take a moment..."):
+                with st.spinner("Downloading and analyzing old media. This may take a moment..."):
                     updated_count = 0
-                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
+                    for f in files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}):
                         try:
                             resp = requests.get(f["url"], timeout=5)
                             if resp.status_code == 200:
@@ -948,7 +941,7 @@ def render_profile_hub_overlay():
                                 files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                                 updated_count += 1
                         except Exception: pass
-                    st.success(f"Scan complete! Analyzed {updated_count} files and applied updated safety rules.")
+                    st.success(f"Scan complete! Analyzed {updated_count} legacy files.")
 
         with c2:
             st.markdown("### Reaction Analytics")
@@ -1582,6 +1575,21 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     current = folders_col.find_one({"_id": actual_folder_id})
     is_root = current is None or current.get("parent_id") is None
 
+    # --- NEW: AUTO-SCANNER ON BOOT ---
+    # Automatically triggers when the user loads the dashboard and finds unscanned files
+    unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}))
+    if unscanned_files:
+        with st.spinner("🤖 Auto-scanning new or unchecked media for safety..."):
+            for f in unscanned_files:
+                try:
+                    resp = requests.get(f["url"], timeout=5)
+                    if resp.status_code == 200:
+                        safe = is_safe_content(resp.content, safety_model)
+                        files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
+                except:
+                    pass
+            st.rerun()
+
     # --- PERFECT TOP NAV ---
     prof_pic = user_data.get("profile_photo") or "https://cdn-icons-png.flaticon.com/512/149/149071.png"
     display_name = html.escape(user_data.get("first_name", st.session_state.username))
@@ -1713,10 +1721,10 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     if r_type == "image":
                                         if not is_safe_content(file_bytes, safety_model):
                                             if force_upload:
-                                                st.warning(f"🚨 '{html.escape(file.name)}' contains 18+ content. Forced upload applied. Image will be blurred in the vault.")
+                                                st.warning(f"🚨 '{html.escape(file.name)}' contains sensitive content. Forced upload applied. Image will be blurred in the vault.")
                                                 is_flagged = True
                                             else:
-                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' contains 18+ content. Check 'Force upload sensitive content' to bypass and blur.")
+                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' contains sensitive content. Check 'Force upload sensitive content' to bypass and blur.")
                                                 continue 
                                         
                                     try:
@@ -1770,6 +1778,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
                         if is_flagged:
+                            # Blurred state in grid view
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20;">🙈</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
