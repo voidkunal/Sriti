@@ -120,27 +120,26 @@ def is_safe_content(file_bytes, model):
         prediction = best_pred
         is_nsfw = False
         
-        # 3. STRICT EXPLICIT & SUGGESTIVE TARGETING LOGIC
+        # 3. HYPER-STRICT TARGETING LOGIC
         if len(prediction) == 5:
             # Standard output format: [drawings, hentai, neutral, porn, sexy]
             hentai_score = prediction[1]
             porn_score = prediction[3]
             sexy_score = prediction[4] # Catches swimwear, lingerie, and short dresses
             
-            # If the AI thinks it is even 40% likely to be swimwear/suggestive, FLAG IT.
-            # If it thinks it is explicit (porn/hentai) over 30%, FLAG IT.
-            if porn_score > 0.30 or hentai_score > 0.30 or sexy_score > 0.40:
+            # Dropped threshold to a hair-trigger 15%. If it detects even a fraction of suggestiveness, FLAG IT.
+            if porn_score > 0.20 or hentai_score > 0.20 or sexy_score > 0.15:
                 is_nsfw = True
             # Combined threshold safeguard
-            elif (porn_score + hentai_score + sexy_score) > 0.45:
+            elif (porn_score + hentai_score + sexy_score) > 0.25:
                 is_nsfw = True
                 
         elif len(prediction) >= 2:
-            # Binary Models [safe, unsafe] -> Strict 40% threshold
-            if prediction[1] > 0.40:
+            # Binary Models [safe, unsafe] -> Strict 20% threshold
+            if prediction[1] > 0.20:
                 is_nsfw = True
         elif len(prediction) == 1:
-            if prediction[0] > 0.40:
+            if prediction[0] > 0.20:
                 is_nsfw = True
                 
         return not is_nsfw
@@ -1708,9 +1707,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     
                     st.markdown("**Add Content**")
-                    # ----------------------------------------------------
-                    # UPLOAD SCANNING LOGIC
-                    # ----------------------------------------------------
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
                         
@@ -1729,14 +1725,13 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     
                                     is_flagged = False
                                     
-                                    # Scans image directly during upload process
                                     if r_type == "image":
                                         if not is_safe_content(file_bytes, safety_model):
                                             if force_upload:
-                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged as 18+/Suggestive. Forced upload applied. Blurring in vault.")
+                                                st.warning(f"🚨 '{html.escape(file.name)}' flagged as Suggestive/18+. Forced upload applied. Blurring in vault.")
                                                 is_flagged = True
                                             else:
-                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged as 18+/Suggestive. Check 'Force upload' to bypass and blur.")
+                                                st.error(f"🚨 Blocked: '{html.escape(file.name)}' flagged as Suggestive/18+. Check 'Force upload' to bypass and blur.")
                                                 continue 
                                         
                                     try:
