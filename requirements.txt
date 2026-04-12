@@ -3,7 +3,7 @@ pymongo
 cloudinary
 certifi
 plotly
-tensorflow-cpu
+tensorflow-cpu>=2.13.0
 Pillow
 numpy
 requests

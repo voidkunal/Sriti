@@ -55,14 +55,13 @@ class AdvancedContentModerator:
             self.model = None
 
         try:
-            # Load facial recognition algorithms
+            # Load facial recognition algorithms to understand "portrait" context
             self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         except:
             self.face_cascade = None
 
     def calculate_image_complexity(self, gray_img):
         # High Laplacian variance indicates sharp edges (Text, Code, Documents, Memes)
-        # Low variance indicates smooth gradients (Skin, Blurry photos)
         return cv2.Laplacian(gray_img, cv2.CV_64F).var()
 
     def detect_context(self, cv_img, gray_img, img_area):
@@ -117,30 +116,30 @@ class AdvancedContentModerator:
             nsfw_score = self.predict_base_cnn(pil_img)
             
             # -------------------------------------------------------------
-            # 3. LLM-STYLE LOGICAL DECISION TREE (Noise Clearing)
+            # 3. LLM-STYLE LOGICAL DECISION TREE (Clearing Noise/Liars)
             # -------------------------------------------------------------
             
-            # Guardrail 1: It's a text document, code screenshot, or meme (High Complexity)
+            # Guardrail 1: It's a text document, code screenshot, or meme (High Edge Complexity)
             if complexity > 1000:
                 nsfw_score -= 0.35 
                 
-            # Guardrail 2: It's a Selfie or Portrait (Prominent Face)
+            # Guardrail 2: It's a Selfie or Portrait (Prominent Face detected)
             if has_face and face_ratio > 0.02:
                 nsfw_score -= 0.40 
                 
-            # Guardrail 3: High Risk Body Shot (Lots of skin, NO Face)
+            # Guardrail 3: High Risk Body Shot (Lots of skin, NO Face detected)
             if skin_ratio > 0.45 and not has_face:
                 nsfw_score += 0.30 
                 
             # FINAL VERDICT: 
-            # Only blocks if the score remains above 75% after all logical checks.
+            # Only blocks if the score remains >= 75% after all logical contextual checks.
             return not (nsfw_score >= 0.75)
             
         except Exception as e:
             print(f"Moderator failed: {e}")
             return True # Fail-safe allows upload
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def get_moderator():
     return AdvancedContentModerator()
 
@@ -384,7 +383,6 @@ if not st.session_state.logged_in and "session" in st.query_params:
 # 6. PRE-RENDER ACTION INTERCEPTORS
 # ==========================================
 if st.session_state.logged_in:
-    
     if "action" in st.query_params and "file_id" in st.query_params:
         try:
             action = st.query_params["action"]
@@ -416,16 +414,14 @@ if st.session_state.logged_in:
                 elif action == "share":
                     st.session_state.pending_share = str(fid)
                 
-                # --- RESTORED MANUAL OVERRIDE CONTROLS ---
-                elif action == "unflag":
-                    files_col.update_one({"_id": fid}, {"$set": {"is_flagged": False}})
-                elif action == "flag":
-                    files_col.update_one({"_id": fid}, {"$set": {"is_flagged": True}})
+                # NOTE: Manual overrides ('unflag', 'flag') are intentionally omitted here 
+                # as per architectural security constraints. The AI holds absolute authority.
 
         except InvalidId: pass
         
         del st.query_params["action"]
         del st.query_params["file_id"]
+        if "lightbox_idx" in st.query_params: del st.query_params["lightbox_idx"]
         st.rerun()
 
     if "react" in st.query_params:
@@ -488,7 +484,6 @@ if st.session_state.logged_in:
     st.session_state.story_groups = story_groups
     random.seed() 
 
-
 # ==========================================
 # 8. DIALOG FUNCTIONS
 # ==========================================
@@ -498,7 +493,7 @@ def developer_api_dialog(folder_id_str):
     folder = folders_col.find_one({"_id": fid})
     
     st.markdown("### Read-Only API Integration")
-    st.write("Generate a REST endpoint to safely embed this album's media on your external website, portfolio, or app.")
+    st.write("Generate a REST endpoint to safely embed this album's media on your external website.")
     
     has_api = folder.get("api_enabled", False)
     api_key = folder.get("api_key", "")
@@ -510,7 +505,6 @@ def developer_api_dialog(folder_id_str):
             st.rerun()
     else:
         st.success("✅ API is Currently Active" if has_api else "⏸️ API is Currently Paused")
-        
         endpoint_url = f"https://voidmemo.streamlit.app/?embed=true&api_key={api_key}" 
         st.text_input("Your Secret API Endpoint URL:", value=endpoint_url, disabled=True)
         
@@ -521,75 +515,16 @@ def developer_api_dialog(folder_id_str):
             
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("#### Quick Integration Snippets")
-        t1, t2, t3 = st.tabs(["HTML / JS", "React (MERN)", "Python"])
-        
+        t1, t2 = st.tabs(["React (MERN)", "Python"])
         with t1:
-            st.code(f"""<div id="voidememo-gallery"></div>
-<script>
-fetch('{endpoint_url}')
-  .then(response => response.text())
-  .then(htmlText => {{
-     const parser = new DOMParser();
-     const doc = parser.parseFromString(htmlText, 'text/html');
-     const data = JSON.parse(doc.getElementById('voidememo-api-data').innerText);
-     const gallery = document.getElementById('voidememo-gallery');
-     data.data.forEach(item => {{
-        const el = item.resource_type === 'image' 
-            ? `<img src="${{item.url}}" style="width:200px;">` 
-            : `<video src="${{item.url}}" controls style="width:200px;"></video>`;
-        gallery.innerHTML += el;
-     }});
-  }})
-  .catch(error => console.error('API Error:', error));
-</script>""", language="html")
-
-        with t2:
-            st.code(f"""// React / Next.js Implementation
+            st.code(f"""// React / Next.js
 import {{ useEffect, useState }} from 'react';
-export default function AlbumGallery() {{
+export default function Gallery() {{
   const [media, setMedia] = useState([]);
-  useEffect(() => {{
-    fetch('{endpoint_url}')
-      .then(res => res.text())
-      .then(htmlText => {{
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(htmlText, 'text/html');
-          const json = JSON.parse(doc.getElementById('voidememo-api-data').innerText);
-          if(json.status === 'success') setMedia(json.data);
-      }});
-  }}, []);
-
-  return (
-    <div className="grid gap-4 grid-cols-3">
-      {{media.map((item, i) => (
-        item.resource_type === 'image' 
-          ? <img key={{i}} src={{item.url}} alt={{item.filename}} className="rounded-lg"/>
-          : <video key={{i}} src={{item.url}} controls className="rounded-lg" />
-      ))}}
-    </div>
-  );
+  useEffect(() => {{ fetch('{endpoint_url}').then(r=>r.text()).then(t=>console.log(t)) }}, []);
 }}""", language="javascript")
-
-        with t3:
-            st.code(f"""# Python (Django / Flask / Streamlit) Implementation
-import requests
-from bs4 import BeautifulSoup
-import json
-API_URL = "{endpoint_url}"
-def get_album_media():
-    response = requests.get(API_URL)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        data_div = soup.find(id="voidememo-api-data")
-        if data_div:
-            json_data = json.loads(data_div.string)
-            if json_data.get("status") == "success":
-                return json_data["data"]
-    return []
-
-for media in get_album_media():
-    print(f"File: {{media['filename']}} | Link: {{media['url']}}")
-""", language="python")
+        with t2:
+            st.code(f"""import requests\nresp = requests.get('{endpoint_url}')""", language="python")
 
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
@@ -645,8 +580,6 @@ def move_media_dialog(file_id_str):
     if c1.button("Move File", type="primary", use_container_width=True):
         new_folder_id = folder_options[selected_folder_name]
         files_col.update_one({"_id": fid}, {"$set": {"folder_id": new_folder_id}})
-        st.success("File moved successfully!")
-        time.sleep(1)
         st.session_state.pending_move = None
         st.rerun()
     if c2.button("Cancel", use_container_width=True):
@@ -918,10 +851,10 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
-            st.write("Force a deep re-scan of ALL media to apply the latest Advanced Semantic Protection rules.")
+            st.write("Force a deep re-scan of ALL media using the Advanced Semantic AI engine.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Analyzing all media with Semantic Context AI..."):
+                with st.spinner("Analyzing all media with Contextual AI..."):
                     updated_count = 0
                     
                     for f in files_col.find({"username": st.session_state.username, "resource_type": "image"}):
@@ -1095,7 +1028,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # DYNAMIC MENU: Includes restored permanent Safe/Sensitive overrides
+    # DYNAMIC MENU: Manual overrides omitted to maintain absolute AI authority
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -1104,15 +1037,6 @@ def render_lightbox_fullscreen(idx, folder_id_str):
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="pin", file_id=fid)}" target="_self">📌 Pin</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="cover", file_id=fid)}" target="_self">🖼️ Set Cover</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="move", file_id=fid)}" target="_self">📂 Move</a>
-    '''
-    
-    # RESTORED OVERRIDE BUTTONS
-    if is_flagged:
-        action_html += f'<a href="{get_nav_link(page="app", folder=safe_folder_id, action="unflag", file_id=fid)}" target="_self" style="color: #34d399; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 12px 12px;">✅ Mark as Safe</a>'
-    else:
-        action_html += f'<a href="{get_nav_link(page="app", folder=safe_folder_id, action="flag", file_id=fid)}" target="_self" style="color: #f59e0b; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 12px 12px;">🚨 Mark Sensitive</a>'
-
-    action_html += f'''
             <a href="{safe_url}" target="_blank" download>⬇️ Download</a>
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="confirm_delete", file_id=fid)}" target="_self" style="color: #ff3b30;">🗑️ Delete</a>
         </div>
@@ -1551,7 +1475,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     unscanned_files = list(files_col.find({"username": st.session_state.username, "resource_type": "image", "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
-        with st.spinner("🤖 Auto-scanning media with Advanced Semantic AI..."):
+        with st.spinner("🤖 Auto-scanning media with Semantic Context AI..."):
             for f in unscanned_files:
                 try:
                     resp = requests.get(f["url"], timeout=5)
