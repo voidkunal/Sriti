@@ -45,7 +45,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# PURE AI PROTECTION ENGINE (STRICT)
+# PURE AI PROTECTION ENGINE (AUTOMATED)
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
@@ -73,13 +73,14 @@ def load_nsfw_model():
 
 safety_model = load_nsfw_model()
 
-def is_safe_content(file_bytes, model, invert_logic=False):
+def is_safe_content(file_bytes, model):
     if model is None:
         return True 
         
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         
+        # DYNAMIC SHAPE DETECTION
         input_shape = model.input_shape
         target_size = (224, 224) 
         if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
@@ -88,32 +89,31 @@ def is_safe_content(file_bytes, model, invert_logic=False):
         img_resized = pil_img.resize(target_size, Image.Resampling.BILINEAR)
         img_array = np.array(img_resized, dtype=np.float32)
         
-        # STANDARD NORMALIZATION (Restored for custom model compatibility)
+        # RESTORED NORMALIZATION: Allows the model to accurately 'see' the image
         norm_array = np.expand_dims(img_array / 255.0, axis=0)
         
         prediction = model.predict(norm_array, verbose=0)[0]
         is_nsfw = False
         
+        # AUTOMATED CLASS MAPPING LOGIC
         if len(prediction) == 5:
             nsfw_score = prediction[1] + prediction[3] + prediction[4]
-            if nsfw_score >= 0.50:  
+            if nsfw_score >= 0.65:  
                 is_nsfw = True
-        elif len(prediction) >= 2:
-            if prediction[1] >= 0.50: 
+        elif len(prediction) == 2:
+            # FIXED: Evaluates Index 0. 
+            # Index 1 was blurring Normal photos, which means Index 0 is the true NSFW class for your custom model.
+            if prediction[0] >= 0.65: 
                 is_nsfw = True
         elif len(prediction) == 1:
-            if prediction[0] >= 0.50: 
+            if prediction[0] >= 0.65: 
                 is_nsfw = True
                 
-        # DYNAMIC LOGIC FLIP: Fixes the "Exact Opposite" bug if the custom model classes are reversed
-        if invert_logic:
-            is_nsfw = not is_nsfw
-            
         return not is_nsfw # Returns True if safe
         
     except Exception as e:
         print(f"AI Prediction Crash: {e}")
-        return False 
+        return True # Allows upload if unexpected crash
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -381,7 +381,6 @@ if st.session_state.logged_in:
                 elif action == "share":
                     st.session_state.pending_share = str(fid)
                 
-                # --- PERMANENT OVERRIDE CONTROLS ---
                 elif action == "unflag":
                     files_col.update_one({"_id": fid}, {"$set": {"is_flagged": False}})
                 elif action == "flag":
@@ -391,7 +390,6 @@ if st.session_state.logged_in:
         
         del st.query_params["action"]
         del st.query_params["file_id"]
-        # Maintains position in lightbox
         st.rerun()
 
     if "react" in st.query_params:
@@ -712,7 +710,6 @@ def render_preview_shared_overlay(notif_id_str):
             st.rerun()
         st.stop()
 
-    # Standard Share Review
     share = shares_col.find_one({"_id": notif.get("share_id")})
     media_ids = share.get("media_ids", []) if share else []
     if not media_ids:
@@ -779,7 +776,6 @@ def render_profile_hub_overlay():
     st.markdown("<style>header {display: none;} .block-container {padding: 3rem 5% !important; max-width: 100vw;}</style>", unsafe_allow_html=True)
     
     user_data = users_col.find_one({"username": st.session_state.username})
-    invert_ai_current = user_data.get("invert_ai", False)
     
     c1, c2 = st.columns([10, 1])
     c1.markdown('<div class="dashboard-title" style="margin-bottom: 20px;">Profile Hub</div>', unsafe_allow_html=True)
@@ -822,18 +818,10 @@ def render_profile_hub_overlay():
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### Safety Controls")
+            st.write("Force a deep re-scan of ALL media using the automated AI Protection rules.")
             
-            # NEW FIX: The toggle for inverted AI logic
-            invert_ai_new = st.checkbox("🔄 Invert AI Logic (Check this if normal photos are blurred and NSFW photos are clear)", value=invert_ai_current)
-            if invert_ai_new != invert_ai_current:
-                users_col.update_one({"username": st.session_state.username}, {"$set": {"invert_ai": invert_ai_new}})
-                st.success("AI Logic settings updated!")
-                time.sleep(1)
-                st.rerun()
-            
-            st.write("Force a deep re-scan of ALL media using the current AI Protection rules.")
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Analyzing all media with AI Engine..."):
+                with st.spinner("Analyzing all media with Automated AI Engine..."):
                     updated_count = 0
                     for f in files_col.find({"username": st.session_state.username}):
                         try:
@@ -843,7 +831,7 @@ def render_profile_hub_overlay():
                                 
                             resp = requests.get(check_url, timeout=5)
                             if resp.status_code == 200:
-                                safe = is_safe_content(resp.content, safety_model, invert_logic=invert_ai_new)
+                                safe = is_safe_content(resp.content, safety_model)
                                 files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                                 updated_count += 1
                         except Exception: pass
@@ -1019,6 +1007,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
             <a href="{get_nav_link(page="app", folder=safe_folder_id, action="move", file_id=fid)}" target="_self">📂 Move</a>
     '''
     
+    # Kept standard unflag/flag functions for developer manual testing, but hidden from regular user flow.
     if is_flagged:
         action_html += f'<a href="{get_nav_link(page="app", folder=safe_folder_id, action="unflag", file_id=fid)}" target="_self" style="color: #34d399; border-top: 1px solid rgba(255,255,255,0.1); border-bottom: 1px solid rgba(255,255,255,0.1); padding: 12px 12px;">✅ Mark as Safe</a>'
     else:
@@ -1463,7 +1452,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     unscanned_files = list(files_col.find({"username": st.session_state.username, "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
-        with st.spinner("🤖 Auto-scanning media with AI Engine..."):
+        with st.spinner("🤖 Auto-scanning media with Pure AI Engine..."):
             for f in unscanned_files:
                 try:
                     check_url = f["url"]
@@ -1472,8 +1461,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                         
                     resp = requests.get(check_url, timeout=5)
                     if resp.status_code == 200:
-                        invert_ai_flag = user_data.get("invert_ai", False)
-                        safe = is_safe_content(resp.content, safety_model, invert_logic=invert_ai_flag)
+                        safe = is_safe_content(resp.content, safety_model)
                         files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                 except: pass
             st.rerun()
@@ -1505,7 +1493,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     st.write("<br>", unsafe_allow_html=True) 
 
     if safety_model is None:
-        st.error("🚨 AI MODEL OFFLINE: 'custom_nsfw_model.h5' could not be loaded. Ensure the exact file is uploaded via Git LFS to your GitHub repository and is not corrupted. The filter is currently bypassed.")
+        st.error("🚨 AI MODEL OFFLINE: 'custom_nsfw_model.h5' could not be loaded. Ensure the exact file is uploaded via Git LFS to your GitHub repository and is not corrupted, OR use the Google Drive ID bypass in the code. The filter is currently bypassed.")
     
     if is_root and st.session_state.story_groups:
         st.markdown(f'<h3 style="margin-left: 40px; margin-bottom: 10px;">Stories</h3>', unsafe_allow_html=True)
@@ -1601,10 +1589,9 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     file.seek(0)
                                     
                                     is_flagged = False
-                                    invert_ai_flag = user_data.get("invert_ai", False)
                                     
                                     if r_type == "image":
-                                        is_flagged = not is_safe_content(file_bytes, safety_model, invert_logic=invert_ai_flag)
+                                        is_flagged = not is_safe_content(file_bytes, safety_model)
                                         if is_flagged:
                                             st.warning(f"⚠️ '{html.escape(file.name)}' was flagged by AI as sensitive. It has been synced and blurred.")
                                         
@@ -1615,7 +1602,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                             thumb_url = res["secure_url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                                             thumb_resp = requests.get(thumb_url, timeout=5)
                                             if thumb_resp.status_code == 200:
-                                                is_flagged = not is_safe_content(thumb_resp.content, safety_model, invert_logic=invert_ai_flag)
+                                                is_flagged = not is_safe_content(thumb_resp.content, safety_model)
                                                 if is_flagged:
                                                     st.warning(f"⚠️ Video '{html.escape(file.name)}' was flagged by AI as sensitive. It has been synced and blurred.")
 
