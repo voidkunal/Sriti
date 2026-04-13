@@ -1,5 +1,5 @@
 import os
-# MUST BE SET BEFORE TENSORFLOW IMPORT to prevent Keras 3 contamination
+# Force TensorFlow to use the classic Keras 2 engine to minimize architecture conflicts
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -31,6 +31,31 @@ from PIL import Image
 import numpy as np
 
 # ==========================================
+# 0. TENSORFLOW KERNEL MONKEY-PATCH
+# ==========================================
+# This is the ultimate fix for Keras 3 -> Keras 2 backward compatibility.
+# We intercept the InputLayer initialization and translate Keras 3 kwargs to Keras 2 on the fly.
+_original_input_init = tf.keras.layers.InputLayer.__init__
+
+def _patched_input_init(self, *args, **kwargs):
+    # 1. Translate Keras 3 'batch_shape' to Keras 2 'batch_input_shape'
+    if 'batch_shape' in kwargs:
+        kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
+    
+    # 2. Strip Keras 3 'optional' argument completely
+    kwargs.pop('optional', None)
+    
+    # 3. Translate Keras 3 DTypePolicy dictionaries back to raw strings
+    if 'dtype' in kwargs and isinstance(kwargs['dtype'], dict):
+        kwargs['dtype'] = kwargs['dtype'].get('config', {}).get('name', 'float32')
+        
+    _original_input_init(self, *args, **kwargs)
+
+# Apply the patch directly to the TensorFlow backend
+tf.keras.layers.InputLayer.__init__ = _patched_input_init
+
+
+# ==========================================
 # 1. UI CONFIGURATION & SETUP
 # ==========================================
 st.set_page_config(page_title="voidememo Vault", page_icon="🌐", layout="wide", initial_sidebar_state="collapsed")
@@ -55,7 +80,7 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 # ==========================================
 
 class SafeTrueDivide(tf.keras.layers.Layer):
-    """Safely handles arbitrary division layers (like image/255.0)"""
+    """Safely handles arbitrary division layers (like image/255.0) to prevent crash"""
     def __init__(self, **kwargs):
         clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
         super(SafeTrueDivide, self).__init__(**clean_kwargs)
@@ -71,11 +96,7 @@ class SafeTrueDivide(tf.keras.layers.Layer):
         return cls(name=config.get('name'))
 
 class SafeAugmentationPassThrough(tf.keras.layers.Layer):
-    """
-    THE FIX: Intercepts all Keras 3 Augmentation layers (RandomContrast, RandomFlip, etc.)
-    and completely ignores their incompatible configuration dictionaries.
-    Acts as a transparent pass-through during prediction.
-    """
+    """Intercepts all Keras 3 Augmentation layers and completely ignores their incompatible config dictionaries."""
     def __init__(self, **kwargs):
         clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
         super(SafeAugmentationPassThrough, self).__init__(**clean_kwargs)
@@ -85,13 +106,11 @@ class SafeAugmentationPassThrough(tf.keras.layers.Layer):
 
     @classmethod
     def from_config(cls, config):
-        # We actively ignore the 'config' dict to bypass 'value_range' and 'data_format' errors
         return cls(name=config.get('name'))
-
 
 @st.cache_resource(show_spinner=False)
 def get_production_ai_engine():
-    model_path = 'production_vault_model.h5'
+    model_path = 'final_production_vault_model.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
@@ -141,9 +160,7 @@ def calculate_skin_ratio(pil_img):
     return np.mean(skin_mask)
 
 def is_safe_content(file_bytes, model):
-    """
-    Evaluates media. Returns True if SAFE (Allowed/Clear), False if NSFW (Blocked/Blurred).
-    """
+    """Evaluates media. Returns True if SAFE (Allowed/Clear), False if NSFW (Blocked/Blurred)."""
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         skin_ratio = calculate_skin_ratio(pil_img)
@@ -177,7 +194,7 @@ def is_safe_content(file_bytes, model):
             is_nsfw_ai = pred[0] > 0.60
             
         # Hybrid Guardrail: AI says NSFW, but mathematical skin detection is near zero.
-        # This prevents false positives on safe objects (e.g., sunsets, sand, dogs).
+        # This prevents false positives on safe objects.
         if is_nsfw_ai and skin_ratio < 0.02 and len(pred) != 5:
             is_nsfw_ai = False
             
