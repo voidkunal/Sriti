@@ -73,25 +73,42 @@ def patch_h5_dna(filepath):
                 if isinstance(config_str, bytes):
                     config_str = config_str.decode('utf-8')
                 config = json.loads(config_str)
-                
+
                 def scrub_node(node):
                     if isinstance(node, dict):
+                        # 1. Fix Keras 3 DTypePolicy
+                        if 'dtype' in node and isinstance(node['dtype'], dict):
+                            if 'config' in node['dtype'] and 'name' in node['dtype']['config']:
+                                node['dtype'] = node['dtype']['config']['name']
+                            else:
+                                node['dtype'] = 'float32'
+
+                        # 2. Fix InputLayer
                         if 'batch_shape' in node:
                             node['batch_input_shape'] = node.pop('batch_shape')
                         if 'optional' in node:
                             node.pop('optional')
+
+                        # 3. Clean up Data Augmentation kwargs (This fixes the RandomFlip error)
+                        if 'class_name' in node and isinstance(node['class_name'], str):
+                            if 'Random' in node['class_name'] and 'config' in node:
+                                node['config'].pop('data_format', None)
+                        
+                        if 'name' in node and isinstance(node.get('name'), str) and 'random' in node['name']:
+                            node.pop('data_format', None)
+
                         for v in node.values(): scrub_node(v)
                     elif isinstance(node, list):
                         for item in node: scrub_node(item)
-                        
+
                 scrub_node(config)
                 f.attrs['model_config'] = json.dumps(config).encode('utf-8')
     except Exception as e:
         print("DNA Patching bypassed/failed:", e)
 
 @st.cache_resource(show_spinner=False)
-def initialize_vault_ai_engine_v7():
-    model_path = 'final_master_model_v7.h5'
+def initialize_vault_ai_engine_v8():
+    model_path = 'final_master_model_v8.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
@@ -117,7 +134,7 @@ def initialize_vault_ai_engine_v7():
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model, model_status = initialize_vault_ai_engine_v7()
+safety_model, model_status = initialize_vault_ai_engine_v8()
 
 def calculate_skin_ratio(pil_img):
     """Fallback mathematical skin detection"""
