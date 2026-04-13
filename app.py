@@ -1,4 +1,5 @@
 import os
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 import streamlit as st
@@ -62,10 +63,24 @@ class SafeTrueDivide(tf.keras.layers.Layer):
         clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
         super(SafeTrueDivide, self).__init__(**clean_kwargs)
     def call(self, inputs, *args, **kwargs):
-        return inputs / 255.0
+        divisor = 255.0
+        if args: divisor = args[0]
+        elif 'y' in kwargs: divisor = kwargs['y']
+        return inputs / divisor
+
+# CUSTOM LAYER: Absorbs ALL Augmentation arguments without crashing
+class SafeAugmentation(tf.keras.layers.Layer):
+    def __init__(self, **kwargs):
+        # Discard any offending Keras 3 kwargs (value_range, data_format, factor, seed, etc.)
+        clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
+        super(SafeAugmentation, self).__init__(**clean_kwargs)
+    
+    def call(self, inputs, *args, **kwargs):
+        # Data augmentation is a pass-through during inference
+        return inputs
 
 def patch_h5_dna(filepath):
-    """MAGIC FIX: Opens the .h5 file and scrubs Keras 3 poison keywords from its DNA."""
+    """MAGIC FIX: Aggressive scrubbing of Keras 3 poison keywords from the model DNA."""
     try:
         with h5py.File(filepath, 'r+') as f:
             if 'model_config' in f.attrs:
@@ -76,26 +91,18 @@ def patch_h5_dna(filepath):
 
                 def scrub_node(node):
                     if isinstance(node, dict):
-                        # 1. Fix Keras 3 DTypePolicy
+                        # Fix Keras 3 DTypePolicy
                         if 'dtype' in node and isinstance(node['dtype'], dict):
-                            if 'config' in node['dtype'] and 'name' in node['dtype']['config']:
-                                node['dtype'] = node['dtype']['config']['name']
-                            else:
-                                node['dtype'] = 'float32'
+                            node['dtype'] = node['dtype'].get('config', {}).get('name', 'float32')
 
-                        # 2. Fix InputLayer
+                        # Fix InputLayer
                         if 'batch_shape' in node:
                             node['batch_input_shape'] = node.pop('batch_shape')
-                        if 'optional' in node:
-                            node.pop('optional')
-
-                        # 3. Clean up Data Augmentation kwargs (This fixes the RandomFlip error)
-                        if 'class_name' in node and isinstance(node['class_name'], str):
-                            if 'Random' in node['class_name'] and 'config' in node:
-                                node['config'].pop('data_format', None)
                         
-                        if 'name' in node and isinstance(node.get('name'), str) and 'random' in node['name']:
-                            node.pop('data_format', None)
+                        # Purge known breaking kwargs
+                        bad_keys = ['optional', 'data_format', 'value_range', 'interpolation', 'fill_mode', 'fill_value']
+                        for bk in bad_keys:
+                            node.pop(bk, None)
 
                         for v in node.values(): scrub_node(v)
                     elif isinstance(node, list):
@@ -107,8 +114,8 @@ def patch_h5_dna(filepath):
         print("DNA Patching bypassed/failed:", e)
 
 @st.cache_resource(show_spinner=False)
-def initialize_vault_ai_engine_v8():
-    model_path = 'final_master_model_v8.h5'
+def initialize_vault_ai_engine_v10():
+    model_path = 'final_master_model_v10.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
@@ -119,22 +126,29 @@ def initialize_vault_ai_engine_v8():
         except Exception as e:
             return None, f"Drive Download Failed: {str(e)}"
 
-    # 1. Patch the DNA of the file before TF touches it
+    # Patch the DNA of the file before TF touches it
     patch_h5_dna(model_path)
 
     try:
-        # 2. Inject custom translation layers
+        # Inject custom translation layers to handle unknown Keras 3 layers
         custom_objs = {
             "TrueDivide": SafeTrueDivide,
-            "TFOpLambda": tf.keras.layers.Lambda
+            "TFOpLambda": tf.keras.layers.Lambda,
+            "RandomContrast": SafeAugmentation,
+            "RandomFlip": SafeAugmentation,
+            "RandomTranslation": SafeAugmentation,
+            "RandomRotation": SafeAugmentation,
+            "RandomZoom": SafeAugmentation,
+            "RandomBrightness": SafeAugmentation,
+            "RandomCrop": SafeAugmentation
         }
-        # 3. Load cleanly
+        # Load cleanly
         model = tf.keras.models.load_model(model_path, compile=False, custom_objects=custom_objs)
         return model, "ONLINE"
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model, model_status = initialize_vault_ai_engine_v8()
+safety_model, model_status = initialize_vault_ai_engine_v10()
 
 def calculate_skin_ratio(pil_img):
     """Fallback mathematical skin detection"""
