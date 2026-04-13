@@ -1,3 +1,7 @@
+import os
+# MUST BE SET BEFORE TENSORFLOW IS IMPORTED TO FIX THE "127.5" CRASH
+os.environ["TF_USE_LEGACY_KERAS"] = "1" 
+
 import streamlit as st
 import streamlit.components.v1 as components
 from pymongo import MongoClient
@@ -19,7 +23,6 @@ import secrets
 import json
 import io
 import requests
-import os
 import urllib.request
 import gdown
 
@@ -54,46 +57,21 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def initialize_ai_vault_engine_final():
-    # Fresh function name to break Streamlit cache completely
-    local_model_path = 'custom_nsfw_model.h5'
-    download_model_path = 'verified_downloaded_model.h5'
+    # Because TF is forced into Legacy Keras mode, it will cleanly load everything
+    model_path = 'final_verified_model.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
-    target_path = local_model_path
-    
-    # If GitHub LFS corrupted the file (size < 1MB) or it's missing, use GDrive
-    if not os.path.exists(local_model_path) or os.path.getsize(local_model_path) < 1000000:
-        target_path = download_model_path
-        if not os.path.exists(download_model_path):
-            print("Downloading AI model directly from User's Google Drive link...")
-            try:
-                download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
-                gdown.download(url=download_url, output=download_model_path, quiet=False)
-            except Exception as e:
-                return None, f"Drive Download Failed: {str(e)}"
+    if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
+        print("Downloading AI model directly from User's Google Drive link...")
+        try:
+            download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
+            gdown.download(url=download_url, output=model_path, quiet=False)
+        except Exception as e:
+            return None, f"Drive Download Failed: {str(e)}"
 
     try:
-        # BULLETPROOF FIX: A safe layer wrapper to absorb Keras dictionaries without crashing
-        class SafeTrueDivide(tf.keras.layers.Layer):
-            def __init__(self, *args, **kwargs):
-                name = kwargs.get('name', 'safe_true_divide')
-                super(SafeTrueDivide, self).__init__(name=name)
-            
-            def call(self, inputs, *args, **kwargs):
-                # Safely normalize the pixel data
-                return inputs / 255.0
-
-        custom_objs = {
-            "TrueDivide": SafeTrueDivide,
-            "TFOpLambda": tf.keras.layers.Lambda
-        }
-        
-        # Load the model with the custom layer injected
-        model = tf.keras.models.load_model(
-            target_path, 
-            compile=False, 
-            custom_objects=custom_objs
-        )
+        # Legacy Keras perfectly understands TrueDivide and 127.5 floats
+        model = tf.keras.models.load_model(model_path, compile=False)
         return model, "ONLINE"
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
