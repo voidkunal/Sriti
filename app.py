@@ -20,7 +20,6 @@ import random
 import datetime
 import html
 import secrets 
-import json
 import io
 import requests
 
@@ -58,7 +57,7 @@ def load_production_ai():
     model_path = 'custom_nsfw_model.h5'
     
     if not os.path.exists(model_path):
-        return None, "Model file not found. Ensure 'custom_nsfw_model.h5' is uploaded to your directory."
+        return None, "Model file not found. Ensure 'custom_nsfw_model.h5' is in your folder."
 
     try:
         model = tf.keras.models.load_model(model_path, compile=False)
@@ -104,12 +103,10 @@ def is_safe_content(file_bytes, model):
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         skin_ratio = calculate_skin_ratio(pil_img)
         
-        # Fallback Mode
         if model is None:
             if skin_ratio > 0.55: return False 
             return True 
             
-        # AI Mode
         target_size = (224, 224) 
         if model.input_shape and len(model.input_shape) >= 3 and model.input_shape[1] is not None:
             target_size = (model.input_shape[1], model.input_shape[2])
@@ -128,7 +125,6 @@ def is_safe_content(file_bytes, model):
         elif len(pred) == 1:
             is_nsfw = pred[0] > 0.60
             
-        # Guardrail against false positives
         if is_nsfw and skin_ratio < 0.02 and len(pred) != 5:
             is_nsfw = False
             
@@ -141,22 +137,30 @@ def is_safe_content(file_bytes, model):
 # ==========================================
 # 3. DATABASE & CLOUD CONFIGURATION
 # ==========================================
-MONGO_URI = st.secrets["MONGO_URI"]
+try:
+    MONGO_URI = st.secrets["MONGO_URI"]
+    # Added ServerSelectionTimeout to prevent silent app freezing
+    client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
+    client.admin.command('ping') # Fast check to ensure it's actually connected
+except Exception as e:
+    st.error(f"🚨 Critical Database Error: Cannot connect to MongoDB. Check your MONGO_URI and ensure your IP is whitelisted in Atlas. Details: {str(e)}")
+    st.stop()
 
-client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where())
 db = client["memory_vault"]
-
 users_col = db["users"]
 files_col = db["files"]
 folders_col = db["folders"]
 shares_col = db["shares"]             
 notifications_col = db["notifications"] 
 
-cloudinary.config(
-    cloud_name=st.secrets["CLOUDINARY_CLOUD_NAME"],
-    api_key=st.secrets["CLOUDINARY_API_KEY"],
-    api_secret=st.secrets["CLOUDINARY_API_SECRET"]
-)
+try:
+    cloudinary.config(
+        cloud_name=st.secrets["CLOUDINARY_CLOUD_NAME"],
+        api_key=st.secrets["CLOUDINARY_API_KEY"],
+        api_secret=st.secrets["CLOUDINARY_API_SECRET"]
+    )
+except Exception as e:
+    st.error(f"🚨 Cloudinary Config Error: {str(e)}")
 
 # ==========================================
 # 4. HEADLESS API ROUTER
@@ -316,14 +320,20 @@ def send_otp_email(receiver_email, otp):
         msg['Subject'] = "voidememo - Vault Security Code"
         body = f"Hello,\n\nYour secure 6-digit access code is: {otp}\n\nThis code will expire in 10 minutes. If you did not request this, secure your account immediately."
         msg.attach(MIMEText(body, 'plain'))
-        server = smtplib.SMTP('smtp.gmail.com', 587)
+        
+        # Added explicit timeout to prevent infinite hanging
+        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=10)
         server.starttls()
         server.login(sender_email, sender_password)
         server.send_message(msg)
         server.quit()
         return True
+    except smtplib.SMTPAuthenticationError:
+        st.error("🚨 Email Auth Failed: Google blocked the login. Ensure you are using a 16-letter Google 'App Password' inside secrets.toml, NOT your normal Gmail password.")
+        return False
     except Exception as e:
-        st.error("Failed to send secure email. Please try again later.")
+        # This will now print the EXACT reason it fails (Network, Port Block, etc.)
+        st.error(f"🚨 Email Sending Failed: {str(e)}")
         return False
 
 # ==========================================
@@ -1251,8 +1261,6 @@ div[data-testid="stAppViewBlockContainer"]::before {
                                     st.session_state.login_email = email.strip().lower()
                                     st.session_state.login_step = 1
                                     st.rerun()
-                                else:
-                                    st.error("Failed to send email. Ensure SMTP is configured.")
                         else:
                             st.error("Invalid credentials.")
                             
