@@ -1,5 +1,4 @@
 import os
-# CRITICAL: Force TensorFlow into Legacy mode BEFORE imports
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -55,132 +54,101 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 # 2. BULLETPROOF HYBRID AI ENGINE
 # ==========================================
 
-class SafeDummyLayer(tf.keras.layers.Layer):
-    """Absorbs Data Augmentation layers cleanly without crashing on Keras 3 kwargs."""
-    def __init__(self, **kwargs):
-        clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
-        super(SafeDummyLayer, self).__init__(**clean_kwargs)
-    def call(self, inputs, *args, **kwargs):
-        return inputs
-    @classmethod
-    def from_config(cls, config):
-        return cls(name=config.get('name'))
-
-class SafeDivLayer(tf.keras.layers.Layer):
-    """Safely executes pixel math bypassing TrueDivide serialization bugs."""
-    def __init__(self, **kwargs):
-        clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
-        super(SafeDivLayer, self).__init__(**clean_kwargs)
-    def call(self, inputs, *args, **kwargs):
-        return inputs / 255.0
-    @classmethod
-    def from_config(cls, config):
-        return cls(name=config.get('name'))
-
-def patch_h5_model_dna(filepath):
-    """Directly manipulates the HDF5 DNA to erase ALL Keras 3 syntax before TF load."""
-    try:
-        with h5py.File(filepath, 'r+') as f:
-            if 'model_config' in f.attrs:
-                config_str = f.attrs['model_config']
-                if isinstance(config_str, bytes):
-                    config_str = config_str.decode('utf-8')
-                config = json.loads(config_str)
-
-                def scrub(node):
-                    if isinstance(node, dict):
-                        # Fix DTypePolicy crash
-                        if 'dtype' in node and isinstance(node['dtype'], dict):
-                            node['dtype'] = node['dtype'].get('config', {}).get('name', 'float32')
-                        
-                        # Fix InputLayer batch_shape crash
-                        if 'batch_shape' in node:
-                            node['batch_input_shape'] = node.pop('batch_shape')
-                        
-                        # Strip Augmentation kwargs
-                        cname = node.get('class_name', '')
-                        nname = node.get('name', '')
-                        if 'Random' in cname or 'Random' in nname:
-                            for k in ['value_range', 'data_format', 'interpolation', 'fill_mode', 'fill_value']:
-                                node.pop(k, None)
-                                if 'config' in node and isinstance(node['config'], dict):
-                                    node['config'].pop(k, None)
-                        
-                        # Strip Keras 3 exclusive keys globally
-                        for k in ['optional', 'build_input_shape']:
-                            node.pop(k, None)
-                            if 'config' in node and isinstance(node['config'], dict):
-                                node['config'].pop(k, None)
-                        
-                        # FIX FOR: 'str' object has no attribute 'as_list'
-                        for key in ['input_layers', 'output_layers']:
-                            if key in node and isinstance(node[key], list):
-                                if len(node[key]) > 0 and isinstance(node[key][0], str):
-                                    node[key] = [node[key]]
-                                    
-                        if 'inbound_nodes' in node and isinstance(node['inbound_nodes'], list):
-                            for i, inbound in enumerate(node['inbound_nodes']):
-                                if isinstance(inbound, list) and len(inbound) > 0 and isinstance(inbound[0], str):
-                                    node['inbound_nodes'][i] = [inbound]
-
-                        for k, v in list(node.items()):
-                            node[k] = scrub(v)
-                        return node
-                    elif isinstance(node, list):
-                        return [scrub(item) for item in node]
-                    else:
-                        return node
-
-                config = scrub(config)
-                f.attrs['model_config'] = json.dumps(config).encode('utf-8')
-    except Exception as e:
-        print(f"H5 Patching Warning: {e}")
-
 @st.cache_resource(show_spinner=False)
-def initialize_vault_ai_engine_v14():
-    # Enforced unique filename to absolutely destroy Streamlit's old cache
-    model_path = 'production_vault_model_v14.h5'
+def load_production_ai():
+    """In-Memory JSON Translation to bypass all Keras 3 Incompatibility Bugs"""
+    model_path = 'my_ai_vault_model.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
-        print("Downloading AI Model from Cloud Storage...")
         try:
             download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
             gdown.download(url=download_url, output=model_path, quiet=False)
         except Exception as e:
-            return None, f"Cloud Download Failed: {str(e)}"
+            return None, f"Download Failed: {str(e)}"
 
     if not os.path.exists(model_path):
-        return None, "Model file not found after download."
-
-    # Scrub the DNA
-    patch_h5_model_dna(model_path)
-
-    # Apply Safe Interceptors
-    custom_objs = {
-        "RandomContrast": SafeDummyLayer,
-        "RandomFlip": SafeDummyLayer,
-        "RandomRotation": SafeDummyLayer,
-        "RandomZoom": SafeDummyLayer,
-        "RandomTranslation": SafeDummyLayer,
-        "RandomBrightness": SafeDummyLayer,
-        "RandomCrop": SafeDummyLayer,
-        "TrueDivide": SafeDivLayer,
-        "TFOpLambda": tf.keras.layers.Lambda
-    }
+        return None, "Model file not found."
 
     try:
-        model = tf.keras.models.load_model(model_path, compile=False, custom_objects=custom_objs)
-        return model, "ONLINE"
-    except Exception as e:
-        return None, f"TensorFlow Engine Crash: {str(e)}"
+        # 1. Read JSON config physically from the H5 attributes
+        with h5py.File(model_path, 'r') as f:
+            config_str = f.attrs.get('model_config')
+            if isinstance(config_str, bytes):
+                config_str = config_str.decode('utf-8')
+            config = json.loads(config_str)
 
-# Guaranteed Global Variables (Prevents NameError)
+        # 2. Memory-Scrub all Keras 3 poison keywords
+        def scrub(node):
+            if isinstance(node, dict):
+                # Fix DTypePolicy crash
+                if 'dtype' in node and isinstance(node['dtype'], dict):
+                    node['dtype'] = node['dtype'].get('config', {}).get('name', 'float32')
+                # Fix batch_shape crash
+                if 'batch_shape' in node:
+                    node['batch_input_shape'] = node.pop('batch_shape')
+                
+                # Delete Augmentation/Keras 3 exclusive kwargs
+                bad_keys = ['optional', 'value_range', 'data_format', 'interpolation', 'fill_mode', 'fill_value']
+                for k in bad_keys:
+                    node.pop(k, None)
+                    
+                # Fix flat string lists ('str' object has no attribute 'as_list')
+                for key in ['input_layers', 'output_layers']:
+                    if key in node and isinstance(node[key], list) and len(node[key]) > 0 and isinstance(node[key][0], str):
+                        node[key] = [node[key]]
+                if 'inbound_nodes' in node and isinstance(node['inbound_nodes'], list):
+                    for i, inbound in enumerate(node['inbound_nodes']):
+                        if isinstance(inbound, list) and len(inbound) > 0 and isinstance(inbound[0], str):
+                            node['inbound_nodes'][i] = [inbound]
+                            
+                for v in list(node.values()): scrub(v)
+            elif isinstance(node, list):
+                for item in node: scrub(item)
+
+        scrub(config)
+
+        # 3. Create Custom Bypass Layers
+        class SafeDummyLayer(tf.keras.layers.Layer):
+            def __init__(self, **kwargs):
+                clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
+                super().__init__(**clean_kwargs)
+            def call(self, inputs, *args, **kwargs): return inputs
+
+        class SafeDivLayer(tf.keras.layers.Layer):
+            def __init__(self, **kwargs):
+                clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
+                super().__init__(**clean_kwargs)
+            def call(self, inputs, *args, **kwargs): return inputs / 255.0
+
+        custom_objs = {
+            "RandomContrast": SafeDummyLayer,
+            "RandomFlip": SafeDummyLayer,
+            "RandomRotation": SafeDummyLayer,
+            "RandomZoom": SafeDummyLayer,
+            "RandomTranslation": SafeDummyLayer,
+            "RandomBrightness": SafeDummyLayer,
+            "RandomCrop": SafeDummyLayer,
+            "TrueDivide": SafeDivLayer,
+            "TFOpLambda": tf.keras.layers.Lambda
+        }
+
+        # 4. Construct Architecture & Load Weights natively in Keras 2
+        with tf.keras.utils.custom_object_scope(custom_objs):
+            model = tf.keras.models.model_from_json(json.dumps(config))
+        
+        model.load_weights(model_path)
+        return model, "ONLINE"
+
+    except Exception as e:
+        return None, f"TensorFlow Error: {str(e)}"
+
+# Guaranteed Global Variables
 safety_model = None
 model_status = "Initializing..."
 
 try:
-    _ai_result = initialize_vault_ai_engine_v14()
+    _ai_result = load_production_ai()
     if _ai_result and len(_ai_result) == 2:
         safety_model, model_status = _ai_result
 except Exception as fatal_e:
@@ -230,7 +198,6 @@ def is_safe_content(file_bytes, model):
         is_nsfw = False
         
         if len(pred) == 5:
-            # 0:drawings, 1:hentai, 2:neutral, 3:porn, 4:sexy
             nsfw_score = pred[1] + pred[3] + pred[4]
             is_nsfw = nsfw_score >= 0.60
         elif len(pred) == 2:
@@ -354,7 +321,6 @@ if api_req_key:
         st.error("Access Denied. Invalid or disabled API Key.")
         
     st.stop()
-
 
 # ==========================================
 # 5. UTILITIES & SECURITY FUNCTIONS
