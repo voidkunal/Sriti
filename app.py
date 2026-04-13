@@ -23,8 +23,6 @@ import secrets
 import json
 import io
 import requests
-import gdown
-import h5py
 
 import tensorflow as tf
 from PIL import Image
@@ -56,90 +54,15 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 
 @st.cache_resource(show_spinner=False)
 def load_production_ai():
-    """In-Memory JSON Translation to bypass all Keras 3 Incompatibility Bugs"""
-    model_path = 'my_ai_vault_model.h5'
-    gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
+    """Simple, direct loading of your custom model."""
+    model_path = 'custom_nsfw_model.h5'
     
-    if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
-        try:
-            download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
-            gdown.download(url=download_url, output=model_path, quiet=False)
-        except Exception as e:
-            return None, f"Download Failed: {str(e)}"
-
     if not os.path.exists(model_path):
-        return None, "Model file not found."
+        return None, "Model file not found. Ensure 'custom_nsfw_model.h5' is uploaded to your directory."
 
     try:
-        # 1. Read JSON config physically from the H5 attributes
-        with h5py.File(model_path, 'r') as f:
-            config_str = f.attrs.get('model_config')
-            if isinstance(config_str, bytes):
-                config_str = config_str.decode('utf-8')
-            config = json.loads(config_str)
-
-        # 2. Memory-Scrub all Keras 3 poison keywords
-        def scrub(node):
-            if isinstance(node, dict):
-                # Fix DTypePolicy crash
-                if 'dtype' in node and isinstance(node['dtype'], dict):
-                    node['dtype'] = node['dtype'].get('config', {}).get('name', 'float32')
-                # Fix batch_shape crash
-                if 'batch_shape' in node:
-                    node['batch_input_shape'] = node.pop('batch_shape')
-                
-                # Delete Augmentation/Keras 3 exclusive kwargs
-                bad_keys = ['optional', 'value_range', 'data_format', 'interpolation', 'fill_mode', 'fill_value']
-                for k in bad_keys:
-                    node.pop(k, None)
-                    
-                # Fix flat string lists ('str' object has no attribute 'as_list')
-                for key in ['input_layers', 'output_layers']:
-                    if key in node and isinstance(node[key], list) and len(node[key]) > 0 and isinstance(node[key][0], str):
-                        node[key] = [node[key]]
-                if 'inbound_nodes' in node and isinstance(node['inbound_nodes'], list):
-                    for i, inbound in enumerate(node['inbound_nodes']):
-                        if isinstance(inbound, list) and len(inbound) > 0 and isinstance(inbound[0], str):
-                            node['inbound_nodes'][i] = [inbound]
-                            
-                for v in list(node.values()): scrub(v)
-            elif isinstance(node, list):
-                for item in node: scrub(item)
-
-        scrub(config)
-
-        # 3. Create Custom Bypass Layers
-        class SafeDummyLayer(tf.keras.layers.Layer):
-            def __init__(self, **kwargs):
-                clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
-                super().__init__(**clean_kwargs)
-            def call(self, inputs, *args, **kwargs): return inputs
-
-        class SafeDivLayer(tf.keras.layers.Layer):
-            def __init__(self, **kwargs):
-                clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
-                super().__init__(**clean_kwargs)
-            def call(self, inputs, *args, **kwargs): return inputs / 255.0
-
-        custom_objs = {
-            "RandomContrast": SafeDummyLayer,
-            "RandomFlip": SafeDummyLayer,
-            "RandomRotation": SafeDummyLayer,
-            "RandomZoom": SafeDummyLayer,
-            "RandomTranslation": SafeDummyLayer,
-            "RandomBrightness": SafeDummyLayer,
-            "RandomCrop": SafeDummyLayer,
-            "TrueDivide": SafeDivLayer,
-            "TFOpLambda": tf.keras.layers.Lambda
-        }
-
-        # 4. Construct Architecture & Load Weights natively in Keras 2
-        with tf.keras.utils.custom_object_scope(custom_objs):
-            model = tf.keras.models.model_from_json(json.dumps(config))
-        
-        model.load_weights(model_path)
+        model = tf.keras.models.load_model(model_path, compile=False)
         return model, "ONLINE"
-
     except Exception as e:
         return None, f"TensorFlow Error: {str(e)}"
 
@@ -482,8 +405,8 @@ if st.session_state.logged_in:
 
         except InvalidId: pass
         
-        del st.query_params["action"]
-        del st.query_params["file_id"]
+        if "action" in st.query_params: del st.query_params["action"]
+        if "file_id" in st.query_params: del st.query_params["file_id"]
         if "lightbox_idx" in st.query_params: del st.query_params["lightbox_idx"]
         st.rerun()
 
@@ -501,7 +424,8 @@ if st.session_state.logged_in:
                         file_id = items[s_idx]["_id"]
                         files_col.update_one({"_id": file_id}, {"$set": {"tag": st.query_params["react"], "tag_time": time.time()}})
         except Exception: pass
-        del st.query_params["react"]
+        
+        if "react" in st.query_params: del st.query_params["react"]
         if "file_id" in st.query_params: del st.query_params["file_id"]
         st.rerun()
 
@@ -767,7 +691,7 @@ def render_preview_shared_overlay(notif_id_str):
     c1, c2 = st.columns([10, 1])
     c1.markdown("## 📬 Shared Media Preview")
     if c2.button("✕", key="close_preview_overlay"):
-        del st.query_params["preview_notif"]
+        if "preview_notif" in st.query_params: del st.query_params["preview_notif"]
         st.rerun()
 
     try: notif_oid = ObjectId(notif_id_str)
@@ -798,7 +722,7 @@ def render_preview_shared_overlay(notif_id_str):
 
         if st.button("Mark as Read & Close", use_container_width=True):
             notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
-            del st.query_params["preview_notif"]
+            if "preview_notif" in st.query_params: del st.query_params["preview_notif"]
             st.rerun()
         st.stop()
 
@@ -834,7 +758,7 @@ def render_preview_shared_overlay(notif_id_str):
             if e_cols[e_idx % 4].button(em, key=f"sreact_{em}", use_container_width=True):
                 notifications_col.insert_one({"username": notif['sender'], "sender": st.session_state.username, "type": "share_reaction", "share_id": notif.get("share_id"), "message": f"reacted {em} to your shared memory.", "is_read": False, "created_at": time.time()})
                 st.success(f"Sent {em} to {html.escape(notif['sender'])}!"); time.sleep(1)
-                del st.query_params["preview_notif"]
+                if "preview_notif" in st.query_params: del st.query_params["preview_notif"]
                 st.rerun()
 
     st.write("<br>", unsafe_allow_html=True)
@@ -856,11 +780,14 @@ def render_preview_shared_overlay(notif_id_str):
 
         notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
         shares_col.update_one({"_id": share["_id"]}, {"$set": {"is_seen": True}})
-        st.success("Saved to Shared Media album!"); time.sleep(1); del st.query_params["preview_notif"]; st.rerun()
+        st.success("Saved to Shared Media album!"); time.sleep(1)
+        if "preview_notif" in st.query_params: del st.query_params["preview_notif"]
+        st.rerun()
         
     if c2.button("Mark Read & Close", use_container_width=True):
         notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
-        del st.query_params["preview_notif"]; st.rerun()
+        if "preview_notif" in st.query_params: del st.query_params["preview_notif"]
+        st.rerun()
     st.stop()
 
 
@@ -872,7 +799,7 @@ def render_profile_hub_overlay():
     c1, c2 = st.columns([10, 1])
     c1.markdown('<div class="dashboard-title" style="margin-bottom: 20px;">Profile Hub</div>', unsafe_allow_html=True)
     if c2.button("✕", key="close_hub_overlay"):
-        del st.query_params["profile_hub"]
+        if "profile_hub" in st.query_params: del st.query_params["profile_hub"]
         st.rerun()
 
     p_tab1, p_tab2, p_tab3 = st.tabs(["⚙️ Settings", "🔔 Notifications", "👥 Switch Profiles"])
@@ -947,12 +874,12 @@ def render_profile_hub_overlay():
     with p_tab2:
         if st.query_params.get("confirm_all_read", "").lower() == "true":
              notifications_col.update_many({"username": st.session_state.username}, {"$set": {"is_read": True}})
-             st.query_params.pop("confirm_all_read", None)
+             if "confirm_all_read" in st.query_params: del st.query_params["confirm_all_read"]
              st.success("All read!"); time.sleep(1); st.rerun()
 
         if st.query_params.get("confirm_clear_all", "").lower() == "true":
              notifications_col.delete_many({"username": st.session_state.username})
-             st.query_params.pop("confirm_clear_all", None)
+             if "confirm_clear_all" in st.query_params: del st.query_params["confirm_clear_all"]
              st.success("All cleared!"); time.sleep(1); st.rerun()
 
         st.markdown("### Your Notifications")
@@ -978,7 +905,7 @@ def render_profile_hub_overlay():
                         notifications_col.update_one({"_id": n['_id']}, {"$set": {"is_read": True}})
                         if n.get("type") in ["share", "share_reaction"]: 
                             st.query_params["preview_notif"] = str(n['_id'])
-                            del st.query_params["profile_hub"]
+                            if "profile_hub" in st.query_params: del st.query_params["profile_hub"]
                         st.rerun()
                 with col_del:
                     if st.button("❌", key=f"deln_{n['_id']}", help="Delete notification"):
@@ -996,7 +923,8 @@ def render_profile_hub_overlay():
                     users_col.update_one({"username": sib["username"]}, {"$set": {"session_token": token}})
                     st.session_state.username = sib["username"]
                     st.query_params["session"] = token
-                    del st.query_params["profile_hub"]; st.rerun()
+                    if "profile_hub" in st.query_params: del st.query_params["profile_hub"]
+                    st.rerun()
                     
         if len(siblings) < 5:
             st.info("You can create up to 5 profiles using this email. Create a new account via the signup page using this email address.")
@@ -1011,7 +939,7 @@ def render_ai_chat_overlay():
         c1, c2 = st.columns([10, 1])
         c1.markdown('<div class="dashboard-title" style="margin-bottom: 5px;">Vault AI</div>', unsafe_allow_html=True)
         if c2.button("✕", key="close_ai_overlay"):
-            del st.query_params["ai_chat"]
+            if "ai_chat" in st.query_params: del st.query_params["ai_chat"]
             st.rerun()
             
         st.markdown("<p class='muted-text'>Ask me directly about your storage, files, or account.</p>", unsafe_allow_html=True)
