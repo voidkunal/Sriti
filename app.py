@@ -1,5 +1,5 @@
 import os
-# CRITICAL: Force TensorFlow into Legacy mode BEFORE imports to isolate Keras 2
+# CRITICAL: Force TensorFlow into Legacy mode BEFORE imports
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -21,35 +21,15 @@ import random
 import datetime
 import html
 import secrets 
+import json
 import io
 import requests
-import json
 import gdown
 import h5py
 
-# ML Libraries for Data Protection Model
 import tensorflow as tf
 from PIL import Image
 import numpy as np
-
-# ==========================================
-# 0. TENSORFLOW KERNEL MONKEY-PATCH
-# ==========================================
-# Intercepts InputLayer initialization to translate Keras 3 kwargs to Keras 2 on the fly
-_original_input_init = tf.keras.layers.InputLayer.__init__
-
-def _patched_input_init(self, *args, **kwargs):
-    if 'batch_shape' in kwargs:
-        kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
-    kwargs.pop('optional', None)
-    
-    if 'dtype' in kwargs and isinstance(kwargs['dtype'], dict):
-        kwargs['dtype'] = kwargs['dtype'].get('config', {}).get('name', 'float32')
-        
-    _original_input_init(self, *args, **kwargs)
-
-tf.keras.layers.InputLayer.__init__ = _patched_input_init
-
 
 # ==========================================
 # 1. UI CONFIGURATION & SETUP
@@ -75,38 +55,30 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 # 2. BULLETPROOF HYBRID AI ENGINE
 # ==========================================
 
-class Keras3DTypePolicy:
-    """Intercepts the Keras 3 DTypePolicy object and instantly returns a standard string for Keras 2"""
-    def __new__(cls, name='float32', **kwargs):
-        return str(name)
-
-class SafeTrueDivide(tf.keras.layers.Layer):
-    """Safely handles mathematical division layers without crashing on kwargs"""
+class SafeDummyLayer(tf.keras.layers.Layer):
+    """Absorbs Data Augmentation layers cleanly without crashing on Keras 3 kwargs."""
     def __init__(self, **kwargs):
         clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
-        super(SafeTrueDivide, self).__init__(**clean_kwargs)
-    def call(self, inputs, *args, **kwargs):
-        divisor = 255.0
-        if args: divisor = args[0]
-        elif 'y' in kwargs: divisor = kwargs['y']
-        return inputs / divisor
-    @classmethod
-    def from_config(cls, config):
-        return cls(name=config.get('name'))
-
-class SafeAugmentationPassThrough(tf.keras.layers.Layer):
-    """Bypasses unsupported Data Augmentation kwargs by stripping them entirely"""
-    def __init__(self, **kwargs):
-        clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
-        super(SafeAugmentationPassThrough, self).__init__(**clean_kwargs)
+        super(SafeDummyLayer, self).__init__(**clean_kwargs)
     def call(self, inputs, *args, **kwargs):
         return inputs
     @classmethod
     def from_config(cls, config):
         return cls(name=config.get('name'))
 
+class SafeDivLayer(tf.keras.layers.Layer):
+    """Safely executes pixel math bypassing TrueDivide serialization bugs."""
+    def __init__(self, **kwargs):
+        clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
+        super(SafeDivLayer, self).__init__(**clean_kwargs)
+    def call(self, inputs, *args, **kwargs):
+        return inputs / 255.0
+    @classmethod
+    def from_config(cls, config):
+        return cls(name=config.get('name'))
+
 def patch_h5_model_dna(filepath):
-    """Directly manipulates the HDF5 DNA to erase Keras 3 syntax before TF load."""
+    """Directly manipulates the HDF5 DNA to erase ALL Keras 3 syntax before TF load."""
     try:
         with h5py.File(filepath, 'r+') as f:
             if 'model_config' in f.attrs:
@@ -125,73 +97,98 @@ def patch_h5_model_dna(filepath):
                         if 'batch_shape' in node:
                             node['batch_input_shape'] = node.pop('batch_shape')
                         
-                        # Fix Augmentation kwargs crash
-                        bad_keys = ['optional', 'value_range', 'data_format', 'interpolation', 'fill_mode', 'fill_value']
-                        for k in bad_keys:
-                            node.pop(k, None)
+                        # Strip Augmentation kwargs
+                        cname = node.get('class_name', '')
+                        nname = node.get('name', '')
+                        if 'Random' in cname or 'Random' in nname:
+                            for k in ['value_range', 'data_format', 'interpolation', 'fill_mode', 'fill_value']:
+                                node.pop(k, None)
+                                if 'config' in node and isinstance(node['config'], dict):
+                                    node['config'].pop(k, None)
                         
-                        for v in list(node.values()): scrub(v)
-                    elif isinstance(node, list):
-                        for item in node: scrub(item)
+                        # Strip Keras 3 exclusive keys globally
+                        for k in ['optional', 'build_input_shape']:
+                            node.pop(k, None)
+                            if 'config' in node and isinstance(node['config'], dict):
+                                node['config'].pop(k, None)
+                        
+                        # FIX FOR: 'str' object has no attribute 'as_list'
+                        for key in ['input_layers', 'output_layers']:
+                            if key in node and isinstance(node[key], list):
+                                if len(node[key]) > 0 and isinstance(node[key][0], str):
+                                    node[key] = [node[key]]
+                                    
+                        if 'inbound_nodes' in node and isinstance(node['inbound_nodes'], list):
+                            for i, inbound in enumerate(node['inbound_nodes']):
+                                if isinstance(inbound, list) and len(inbound) > 0 and isinstance(inbound[0], str):
+                                    node['inbound_nodes'][i] = [inbound]
 
-                scrub(config)
+                        for k, v in list(node.items()):
+                            node[k] = scrub(v)
+                        return node
+                    elif isinstance(node, list):
+                        return [scrub(item) for item in node]
+                    else:
+                        return node
+
+                config = scrub(config)
                 f.attrs['model_config'] = json.dumps(config).encode('utf-8')
     except Exception as e:
-        print(f"H5 Patching bypassed: {e}")
+        print(f"H5 Patching Warning: {e}")
 
 @st.cache_resource(show_spinner=False)
-def initialize_vault_ai_engine_v12():
-    model_path = 'final_production_model_v12.h5'
+def initialize_vault_ai_engine_v14():
+    # Enforced unique filename to absolutely destroy Streamlit's old cache
+    model_path = 'production_vault_model_v14.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
-        print("Downloading production AI model...")
+        print("Downloading AI Model from Cloud Storage...")
         try:
             download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
             gdown.download(url=download_url, output=model_path, quiet=False)
         except Exception as e:
             return None, f"Cloud Download Failed: {str(e)}"
 
-    # Rewrite incompatible JSON structures in the file
+    if not os.path.exists(model_path):
+        return None, "Model file not found after download."
+
+    # Scrub the DNA
     patch_h5_model_dna(model_path)
 
+    # Apply Safe Interceptors
+    custom_objs = {
+        "RandomContrast": SafeDummyLayer,
+        "RandomFlip": SafeDummyLayer,
+        "RandomRotation": SafeDummyLayer,
+        "RandomZoom": SafeDummyLayer,
+        "RandomTranslation": SafeDummyLayer,
+        "RandomBrightness": SafeDummyLayer,
+        "RandomCrop": SafeDummyLayer,
+        "TrueDivide": SafeDivLayer,
+        "TFOpLambda": tf.keras.layers.Lambda
+    }
+
     try:
-        # Translation dictionary to isolate the model from Keras 3 objects
-        custom_objs = {
-            "DTypePolicy": Keras3DTypePolicy,
-            "TrueDivide": SafeTrueDivide,
-            "TFOpLambda": tf.keras.layers.Lambda,
-            "RandomContrast": SafeAugmentationPassThrough,
-            "RandomFlip": SafeAugmentationPassThrough,
-            "RandomRotation": SafeAugmentationPassThrough,
-            "RandomZoom": SafeAugmentationPassThrough,
-            "RandomTranslation": SafeAugmentationPassThrough,
-            "RandomBrightness": SafeAugmentationPassThrough,
-            "RandomCrop": SafeAugmentationPassThrough,
-        }
-        
         model = tf.keras.models.load_model(model_path, compile=False, custom_objects=custom_objs)
         return model, "ONLINE"
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-# GLOBALLY PRE-DECLARE VARIABLES TO MAKE NAMEERROR IMPOSSIBLE
+# Guaranteed Global Variables (Prevents NameError)
 safety_model = None
-model_status = "System Initializing..."
+model_status = "Initializing..."
 
 try:
-    _ai_result = initialize_vault_ai_engine_v12()
+    _ai_result = initialize_vault_ai_engine_v14()
     if _ai_result and len(_ai_result) == 2:
         safety_model, model_status = _ai_result
-    else:
-        model_status = "Unknown Model Initialization Error"
 except Exception as fatal_e:
-    safety_model = None
     model_status = f"Fatal Execution Error: {str(fatal_e)}"
 
 
 def calculate_skin_ratio(pil_img):
-    """Mathematical fallback algorithm to calculate exposed skin pixels via RGB bounds."""
+    """Mathematical fallback algorithm for skin detection."""
     try:
         img = pil_img.resize((150, 150), Image.Resampling.NEAREST)
         arr = np.array(img, dtype=np.int32)
@@ -211,41 +208,44 @@ def calculate_skin_ratio(pil_img):
         return 0.0
 
 def is_safe_content(file_bytes, model):
-    """Evaluates media. Returns True if SAFE (Allowed/Clear), False if NSFW (Blocked/Blurred)."""
+    """Evaluates media bytes. Returns: True if SAFE, False if NSFW."""
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         skin_ratio = calculate_skin_ratio(pil_img)
         
+        # Fallback Mode
         if model is None:
             if skin_ratio > 0.55: return False 
-            return True     
+            return True 
             
-        input_shape = model.input_shape
+        # AI Mode
         target_size = (224, 224) 
-        if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
-            target_size = (input_shape[1], input_shape[2])
+        if model.input_shape and len(model.input_shape) >= 3 and model.input_shape[1] is not None:
+            target_size = (model.input_shape[1], model.input_shape[2])
             
         img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
         raw_array = np.expand_dims(img_array, axis=0) 
         
         pred = model.predict(raw_array, verbose=0)[0]
-        is_nsfw_ai = False
+        is_nsfw = False
         
         if len(pred) == 5:
+            # 0:drawings, 1:hentai, 2:neutral, 3:porn, 4:sexy
             nsfw_score = pred[1] + pred[3] + pred[4]
-            is_nsfw_ai = nsfw_score >= 0.60
+            is_nsfw = nsfw_score >= 0.60
         elif len(pred) == 2:
-            is_nsfw_ai = pred[1] > 0.60
+            is_nsfw = pred[1] > 0.60
         elif len(pred) == 1:
-            is_nsfw_ai = pred[0] > 0.60
+            is_nsfw = pred[0] > 0.60
             
-        if is_nsfw_ai and skin_ratio < 0.02 and len(pred) != 5:
-            is_nsfw_ai = False
+        # Guardrail against false positives
+        if is_nsfw and skin_ratio < 0.02 and len(pred) != 5:
+            is_nsfw = False
             
-        return not is_nsfw_ai
+        return not is_nsfw
         
     except Exception as e:
-        print(f"Prediction Process Error: {e}")
+        print(f"Prediction Error: {e}")
         return True 
 
 # ==========================================
@@ -354,6 +354,7 @@ if api_req_key:
         st.error("Access Denied. Invalid or disabled API Key.")
         
     st.stop()
+
 
 # ==========================================
 # 5. UTILITIES & SECURITY FUNCTIONS
