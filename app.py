@@ -1,5 +1,4 @@
 import os
-# CRITICAL: Force TensorFlow into Legacy mode BEFORE imports to isolate Keras 2
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -21,33 +20,15 @@ import random
 import datetime
 import html
 import secrets 
+import json
 import io
 import requests
 import gdown
+import h5py
 
-# ML Libraries for Data Protection Model
 import tensorflow as tf
 from PIL import Image
 import numpy as np
-
-# ==========================================
-# 0. TENSORFLOW KERNEL MONKEY-PATCH
-# ==========================================
-# Overrides InputLayer initialization to translate Keras 3 kwargs to Keras 2 on the fly
-_original_input_init = tf.keras.layers.InputLayer.__init__
-
-def _patched_input_init(self, *args, **kwargs):
-    if 'batch_shape' in kwargs:
-        kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
-    kwargs.pop('optional', None)
-    
-    if 'dtype' in kwargs and isinstance(kwargs['dtype'], dict):
-        kwargs['dtype'] = kwargs['dtype'].get('config', {}).get('name', 'float32')
-        
-    _original_input_init(self, *args, **kwargs)
-
-tf.keras.layers.InputLayer.__init__ = _patched_input_init
-
 
 # ==========================================
 # 1. UI CONFIGURATION & SETUP
@@ -73,124 +54,163 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 # 2. BULLETPROOF HYBRID AI ENGINE
 # ==========================================
 
-class Keras3DTypePolicy:
-    """Intercepts the Keras 3 DTypePolicy object and instantly returns a standard string for Keras 2"""
-    def __new__(cls, name='float32', **kwargs):
-        return str(name)
-
-class SafeTrueDivide(tf.keras.layers.Layer):
-    """Safely handles mathematical division layers without crashing on kwargs"""
+class SafeDummyLayer(tf.keras.layers.Layer):
+    """Absorbs Data Augmentation layers cleanly without crashing on Keras 3 kwargs."""
     def __init__(self, **kwargs):
         clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
-        super(SafeTrueDivide, self).__init__(**clean_kwargs)
-    def call(self, inputs, *args, **kwargs):
-        divisor = 255.0
-        if args: divisor = args[0]
-        elif 'y' in kwargs: divisor = kwargs['y']
-        return inputs / divisor
-    @classmethod
-    def from_config(cls, config):
-        return cls(name=config.get('name'))
-
-class SafeAugmentationPassThrough(tf.keras.layers.Layer):
-    """Bypasses unsupported Data Augmentation kwargs (value_range, data_format) by stripping them entirely"""
-    def __init__(self, **kwargs):
-        clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
-        super(SafeAugmentationPassThrough, self).__init__(**clean_kwargs)
+        super(SafeDummyLayer, self).__init__(**clean_kwargs)
     def call(self, inputs, *args, **kwargs):
         return inputs
     @classmethod
     def from_config(cls, config):
         return cls(name=config.get('name'))
 
+class SafeDivLayer(tf.keras.layers.Layer):
+    """Safely executes pixel math bypassing TrueDivide serialization bugs."""
+    def __init__(self, **kwargs):
+        clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
+        super(SafeDivLayer, self).__init__(**clean_kwargs)
+    def call(self, inputs, *args, **kwargs):
+        return inputs / 255.0
+    @classmethod
+    def from_config(cls, config):
+        return cls(name=config.get('name'))
+
+def patch_h5_model(filepath):
+    """Directly manipulates the HDF5 DNA to erase Keras 3 syntax before TF load."""
+    try:
+        with h5py.File(filepath, 'r+') as f:
+            if 'model_config' in f.attrs:
+                config_str = f.attrs['model_config']
+                if isinstance(config_str, bytes):
+                    config_str = config_str.decode('utf-8')
+                config = json.loads(config_str)
+
+                def scrub(node):
+                    if isinstance(node, dict):
+                        # Fix DTypePolicy crash
+                        if 'dtype' in node and isinstance(node['dtype'], dict):
+                            node['dtype'] = node['dtype'].get('config', {}).get('name', 'float32')
+                        
+                        # Fix InputLayer batch_shape crash
+                        if 'batch_shape' in node:
+                            node['batch_input_shape'] = node.pop('batch_shape')
+                        
+                        # Fix RandomContrast/Augmentation kwargs crash
+                        bad_keys = ['optional', 'value_range', 'data_format', 'interpolation', 'fill_mode', 'fill_value']
+                        for k in bad_keys:
+                            node.pop(k, None)
+                        
+                        for v in node.values(): scrub(v)
+                    elif isinstance(node, list):
+                        for item in node: scrub(item)
+
+                scrub(config)
+                f.attrs['model_config'] = json.dumps(config).encode('utf-8')
+    except Exception as e:
+        print(f"H5 Patching bypassed: {e}")
+
 @st.cache_resource(show_spinner=False)
-def initialize_vault_ai_engine_v11():
-    model_path = 'final_production_model_v11.h5'
+def load_ai_model():
+    model_path = 'custom_nsfw_model_patched.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
-        print("Downloading production AI model...")
         try:
-            download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
-            gdown.download(url=download_url, output=model_path, quiet=False)
-        except Exception as e:
-            return None, f"Cloud Download Failed: {str(e)}"
+            url = f"https://drive.google.com/uc?id={gdrive_file_id}"
+            gdown.download(url, model_path, quiet=False)
+        except Exception:
+            pass
+
+    if not os.path.exists(model_path):
+        return None
+
+    # Patch the DNA to make it Keras 2 compatible
+    patch_h5_model(model_path)
+
+    custom_objs = {
+        "RandomContrast": SafeDummyLayer,
+        "RandomFlip": SafeDummyLayer,
+        "RandomRotation": SafeDummyLayer,
+        "RandomZoom": SafeDummyLayer,
+        "RandomTranslation": SafeDummyLayer,
+        "RandomBrightness": SafeDummyLayer,
+        "RandomCrop": SafeDummyLayer,
+        "TrueDivide": SafeDivLayer,
+        "TFOpLambda": tf.keras.layers.Lambda
+    }
 
     try:
-        # Complete translation dictionary to isolate the model from Keras 3 objects
-        custom_objs = {
-            "DTypePolicy": Keras3DTypePolicy,
-            "TrueDivide": SafeTrueDivide,
-            "TFOpLambda": tf.keras.layers.Lambda,
-            "RandomContrast": SafeAugmentationPassThrough,
-            "RandomFlip": SafeAugmentationPassThrough,
-            "RandomRotation": SafeAugmentationPassThrough,
-            "RandomZoom": SafeAugmentationPassThrough,
-            "RandomTranslation": SafeAugmentationPassThrough,
-            "RandomBrightness": SafeAugmentationPassThrough,
-            "RandomCrop": SafeAugmentationPassThrough,
-        }
-        
         model = tf.keras.models.load_model(model_path, compile=False, custom_objects=custom_objs)
-        return model, "ONLINE"
+        return model
     except Exception as e:
-        return None, f"TensorFlow Engine Crash: {str(e)}"
+        print(f"AI Loading Error: {e}")
+        return None
 
-safety_model, model_status = initialize_vault_ai_engine_v11()
+safety_model = load_ai_model()
 
 def calculate_skin_ratio(pil_img):
-    """Mathematical fallback algorithm to calculate exposed skin pixels via RGB bounds."""
-    img = pil_img.resize((150, 150), Image.Resampling.NEAREST)
-    arr = np.array(img, dtype=np.int32)
-    R, G, B = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
-    
-    max_rgb = np.maximum(R, np.maximum(G, B))
-    min_rgb = np.minimum(R, np.minimum(G, B))
-    
-    rule1 = (R > 95) & (G > 40) & (B > 20)
-    rule2 = (max_rgb - min_rgb) > 15
-    rule3 = np.abs(R - G) > 15
-    rule4 = (R > G) & (R > B)
-    
-    skin_mask = rule1 & rule2 & rule3 & rule4
-    return np.mean(skin_mask)
+    """Mathematical fallback algorithm for skin detection."""
+    try:
+        img = pil_img.resize((150, 150), Image.Resampling.NEAREST)
+        arr = np.array(img, dtype=np.int32)
+        R, G, B = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+        
+        max_rgb = np.maximum(R, np.maximum(G, B))
+        min_rgb = np.minimum(R, np.minimum(G, B))
+        
+        rule1 = (R > 95) & (G > 40) & (B > 20)
+        rule2 = (max_rgb - min_rgb) > 15
+        rule3 = np.abs(R - G) > 15
+        rule4 = (R > G) & (R > B)
+        
+        skin_mask = rule1 & rule2 & rule3 & rule4
+        return np.mean(skin_mask)
+    except:
+        return 0.0
 
 def is_safe_content(file_bytes, model):
-    """Evaluates media. Returns True if SAFE (Allowed/Clear), False if NSFW (Blocked/Blurred)."""
+    """
+    Evaluates media bytes.
+    Returns: True if SAFE, False if NSFW.
+    """
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         skin_ratio = calculate_skin_ratio(pil_img)
         
+        # Failsafe Mode
         if model is None:
             if skin_ratio > 0.55: return False 
-            return True     
+            return True 
             
-        input_shape = model.input_shape
+        # AI Mode
         target_size = (224, 224) 
-        if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
-            target_size = (input_shape[1], input_shape[2])
+        if model.input_shape and len(model.input_shape) >= 3 and model.input_shape[1] is not None:
+            target_size = (model.input_shape[1], model.input_shape[2])
             
         img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
         raw_array = np.expand_dims(img_array, axis=0) 
         
         pred = model.predict(raw_array, verbose=0)[0]
-        is_nsfw_ai = False
+        is_nsfw = False
         
         if len(pred) == 5:
+            # 0:drawings, 1:hentai, 2:neutral, 3:porn, 4:sexy
             nsfw_score = pred[1] + pred[3] + pred[4]
-            is_nsfw_ai = nsfw_score >= 0.60
+            is_nsfw = nsfw_score >= 0.60
         elif len(pred) == 2:
-            is_nsfw_ai = pred[1] > 0.60
+            is_nsfw = pred[1] > 0.60
         elif len(pred) == 1:
-            is_nsfw_ai = pred[0] > 0.60
+            is_nsfw = pred[0] > 0.60
             
-        if is_nsfw_ai and skin_ratio < 0.02 and len(pred) != 5:
-            is_nsfw_ai = False
+        # Guardrail against false positives (e.g. sunsets)
+        if is_nsfw and skin_ratio < 0.02 and len(pred) != 5:
+            is_nsfw = False
             
-        return not is_nsfw_ai
+        return not is_nsfw
         
     except Exception as e:
-        print(f"Prediction Process Error: {e}")
+        print(f"Prediction Error: {e}")
         return True 
 
 # ==========================================
@@ -266,7 +286,6 @@ if api_req_key:
                 .left-arrow {{ left: 0px; }}
                 .right-arrow {{ right: 0px; }}
             </style>
-            
             <div class="carousel-wrapper" id="carouselWrapper">
                 <button class="slide-arrow left-arrow" onclick="slideLeft()">&#10094;</button>
                 <div class="carousel-track" id="carouselTrack">
@@ -274,7 +293,6 @@ if api_req_key:
                 </div>
                 <button class="slide-arrow right-arrow" onclick="slideRight()">&#10095;</button>
             </div>
-            
             <script>
                 const track = document.getElementById("carouselTrack");
                 const scrollAmount = 270; 
@@ -297,8 +315,8 @@ if api_req_key:
             st.markdown('<p style="color: white; text-align: center;">Gallery is empty.</p>', unsafe_allow_html=True)
     else:
         st.error("Access Denied. Invalid or disabled API Key.")
-        
     st.stop()
+
 
 # ==========================================
 # 5. UTILITIES & SECURITY FUNCTIONS
@@ -457,7 +475,6 @@ if st.session_state.logged_in:
                     folders_col.update_one({"_id": file["folder_id"]}, {"$set": {"cover_photo": url}})
                 elif action == "share":
                     st.session_state.pending_share = str(fid)
-
         except InvalidId: pass
         
         del st.query_params["action"]
@@ -1502,7 +1519,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     unscanned_files = list(files_col.find({"username": st.session_state.username, "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
-        with st.spinner("🤖 Auto-scanning legacy media with Automated Hybrid AI..."):
+        with st.spinner("🤖 Auto-scanning legacy media with AI Engine..."):
             for f in unscanned_files:
                 try:
                     check_url = f["url"]
@@ -1512,6 +1529,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     resp = requests.get(check_url, timeout=5)
                     if resp.status_code == 200:
                         safe = is_safe_content(resp.content, safety_model)
+                        # Correct Logic: Flagged = Not Safe
                         files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                 except: pass
             st.rerun()
@@ -1543,7 +1561,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     st.write("<br>", unsafe_allow_html=True) 
 
     if safety_model is not None:
-        st.success("✅ AI Engine is ONLINE. (Note: If your safe photos are currently blurred from a past error, go to Profile Hub and click 'Force Deep Scan' to fix them).")
+        st.success("✅ AI Engine is ONLINE.")
     else:
         st.error(f"🚨 AI MODEL OFFLINE: {model_status}")
     
@@ -1642,8 +1660,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     
                                     # Strict Upload Block logic
                                     if r_type == "image":
-                                        is_flagged = not is_safe_content(file_bytes, safety_model)
-                                        if is_flagged:
+                                        is_safe = is_safe_content(file_bytes, safety_model)
+                                        if not is_safe:
                                             st.error(f"❌ Upload Blocked: '{html.escape(file.name)}' was identified as sensitive (NSFW) content and is not permitted.")
                                             continue
                                         
@@ -1654,13 +1672,13 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                             thumb_url = res["secure_url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                                             thumb_resp = requests.get(thumb_url, timeout=5)
                                             if thumb_resp.status_code == 200:
-                                                is_flagged = not is_safe_content(thumb_resp.content, safety_model)
-                                                if is_flagged:
+                                                is_safe = is_safe_content(thumb_resp.content, safety_model)
+                                                if not is_safe:
                                                     cloudinary.uploader.destroy(res["public_id"], resource_type="video")
                                                     st.error(f"❌ Upload Blocked: Video '{html.escape(file.name)}' was identified as sensitive (NSFW) content and is not permitted.")
                                                     continue
 
-                                        # Save to DB if it passes all filters
+                                        # Save to DB (Since it passed, it is safe, so is_flagged = False)
                                         files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "is_flagged": False, "tag": "", "tag_time": 0})
                                     except Exception as e: 
                                         st.error(f"Failed to upload {html.escape(file.name)}.")
