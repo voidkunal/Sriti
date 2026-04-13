@@ -1,4 +1,5 @@
 import os
+# MUST BE SET BEFORE TENSORFLOW IMPORT to prevent Keras 3 contamination
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -20,12 +21,9 @@ import random
 import datetime
 import html
 import secrets 
-import json
 import io
 import requests
-import urllib.request
 import gdown
-import h5py
 
 # ML Libraries for Data Protection Model
 import tensorflow as tf
@@ -49,109 +47,84 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# SVG Icons for UI
-EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
 EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
+EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
 
 # ==========================================
-# 100% AUTOMATED HYBRID AI ENGINE
+# 2. BULLETPROOF HYBRID AI ENGINE
 # ==========================================
 
-# CUSTOM LAYER: Prevents Keras crash when dividing pixels
 class SafeTrueDivide(tf.keras.layers.Layer):
+    """Safely handles arbitrary division layers (like image/255.0)"""
     def __init__(self, **kwargs):
         clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
         super(SafeTrueDivide, self).__init__(**clean_kwargs)
+        
     def call(self, inputs, *args, **kwargs):
         divisor = 255.0
         if args: divisor = args[0]
         elif 'y' in kwargs: divisor = kwargs['y']
         return inputs / divisor
+        
+    @classmethod
+    def from_config(cls, config):
+        return cls(name=config.get('name'))
 
-# CUSTOM LAYER: Absorbs ALL Augmentation arguments without crashing
-class SafeAugmentation(tf.keras.layers.Layer):
+class SafeAugmentationPassThrough(tf.keras.layers.Layer):
+    """
+    THE FIX: Intercepts all Keras 3 Augmentation layers (RandomContrast, RandomFlip, etc.)
+    and completely ignores their incompatible configuration dictionaries.
+    Acts as a transparent pass-through during prediction.
+    """
     def __init__(self, **kwargs):
-        # Discard any offending Keras 3 kwargs (value_range, data_format, factor, seed, etc.)
         clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
-        super(SafeAugmentation, self).__init__(**clean_kwargs)
-    
+        super(SafeAugmentationPassThrough, self).__init__(**clean_kwargs)
+
     def call(self, inputs, *args, **kwargs):
-        # Data augmentation is a pass-through during inference
         return inputs
 
-def patch_h5_dna(filepath):
-    """MAGIC FIX: Aggressive scrubbing of Keras 3 poison keywords from the model DNA."""
-    try:
-        with h5py.File(filepath, 'r+') as f:
-            if 'model_config' in f.attrs:
-                config_str = f.attrs['model_config']
-                if isinstance(config_str, bytes):
-                    config_str = config_str.decode('utf-8')
-                config = json.loads(config_str)
+    @classmethod
+    def from_config(cls, config):
+        # We actively ignore the 'config' dict to bypass 'value_range' and 'data_format' errors
+        return cls(name=config.get('name'))
 
-                def scrub_node(node):
-                    if isinstance(node, dict):
-                        # Fix Keras 3 DTypePolicy
-                        if 'dtype' in node and isinstance(node['dtype'], dict):
-                            node['dtype'] = node['dtype'].get('config', {}).get('name', 'float32')
-
-                        # Fix InputLayer
-                        if 'batch_shape' in node:
-                            node['batch_input_shape'] = node.pop('batch_shape')
-                        
-                        # Purge known breaking kwargs
-                        bad_keys = ['optional', 'data_format', 'value_range', 'interpolation', 'fill_mode', 'fill_value']
-                        for bk in bad_keys:
-                            node.pop(bk, None)
-
-                        for v in node.values(): scrub_node(v)
-                    elif isinstance(node, list):
-                        for item in node: scrub_node(item)
-
-                scrub_node(config)
-                f.attrs['model_config'] = json.dumps(config).encode('utf-8')
-    except Exception as e:
-        print("DNA Patching bypassed/failed:", e)
 
 @st.cache_resource(show_spinner=False)
-def initialize_vault_ai_engine_v10():
-    model_path = 'final_master_model_v10.h5'
+def get_production_ai_engine():
+    model_path = 'production_vault_model.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
-        print("Downloading AI model directly from User's Google Drive link...")
+        print("Downloading production AI model...")
         try:
             download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
             gdown.download(url=download_url, output=model_path, quiet=False)
         except Exception as e:
-            return None, f"Drive Download Failed: {str(e)}"
-
-    # Patch the DNA of the file before TF touches it
-    patch_h5_dna(model_path)
+            return None, f"Cloud Download Failed: {str(e)}"
 
     try:
-        # Inject custom translation layers to handle unknown Keras 3 layers
+        # Map ALL known problematic Keras 3 layers to our safe interceptor classes
         custom_objs = {
             "TrueDivide": SafeTrueDivide,
             "TFOpLambda": tf.keras.layers.Lambda,
-            "RandomContrast": SafeAugmentation,
-            "RandomFlip": SafeAugmentation,
-            "RandomTranslation": SafeAugmentation,
-            "RandomRotation": SafeAugmentation,
-            "RandomZoom": SafeAugmentation,
-            "RandomBrightness": SafeAugmentation,
-            "RandomCrop": SafeAugmentation
+            "RandomContrast": SafeAugmentationPassThrough,
+            "RandomFlip": SafeAugmentationPassThrough,
+            "RandomRotation": SafeAugmentationPassThrough,
+            "RandomZoom": SafeAugmentationPassThrough,
+            "RandomTranslation": SafeAugmentationPassThrough,
+            "RandomBrightness": SafeAugmentationPassThrough,
+            "RandomCrop": SafeAugmentationPassThrough,
         }
-        # Load cleanly
+        
         model = tf.keras.models.load_model(model_path, compile=False, custom_objects=custom_objs)
         return model, "ONLINE"
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model, model_status = initialize_vault_ai_engine_v10()
+safety_model, model_status = get_production_ai_engine()
 
 def calculate_skin_ratio(pil_img):
-    """Fallback mathematical skin detection"""
+    """Mathematical fallback algorithm to calculate exposed skin pixels via RGB bounds."""
     img = pil_img.resize((150, 150), Image.Resampling.NEAREST)
     arr = np.array(img, dtype=np.int32)
     R, G, B = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
@@ -168,29 +141,34 @@ def calculate_skin_ratio(pil_img):
     return np.mean(skin_mask)
 
 def is_safe_content(file_bytes, model):
-    """Returns True if the content is safe, False if it is NSFW."""
+    """
+    Evaluates media. Returns True if SAFE (Allowed/Clear), False if NSFW (Blocked/Blurred).
+    """
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         skin_ratio = calculate_skin_ratio(pil_img)
         
+        # Failsafe Mode: If model crashed, rely purely on mathematics
         if model is None:
             if skin_ratio > 0.55: return False 
             return True     
             
+        # AI Mode: Prepare Image
         input_shape = model.input_shape
         target_size = (224, 224) 
         if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
             target_size = (input_shape[1], input_shape[2])
             
         img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
-        
-        # Pass RAW array because the SafeTrueDivide layer handles the normalization internally
         raw_array = np.expand_dims(img_array, axis=0) 
         
+        # Execute Prediction
         pred = model.predict(raw_array, verbose=0)[0]
         is_nsfw_ai = False
         
+        # Determine Classification
         if len(pred) == 5:
+            # Assumes standard 5-class (0: drawings, 1: hentai, 2: neutral, 3: porn, 4: sexy)
             nsfw_score = pred[1] + pred[3] + pred[4]
             is_nsfw_ai = nsfw_score >= 0.60
         elif len(pred) == 2:
@@ -198,18 +176,19 @@ def is_safe_content(file_bytes, model):
         elif len(pred) == 1:
             is_nsfw_ai = pred[0] > 0.60
             
-        # Guardrail: Don't blur safe objects 
+        # Hybrid Guardrail: AI says NSFW, but mathematical skin detection is near zero.
+        # This prevents false positives on safe objects (e.g., sunsets, sand, dogs).
         if is_nsfw_ai and skin_ratio < 0.02 and len(pred) != 5:
             is_nsfw_ai = False
             
         return not is_nsfw_ai
         
     except Exception as e:
-        print(f"Prediction Crash: {e}")
-        return True 
+        print(f"Prediction Process Error: {e}")
+        return True # Default to allow/safe if the image parsing fails internally
 
 # ==========================================
-# 2. DATABASE & CLOUD CONFIGURATION
+# 3. DATABASE & CLOUD CONFIGURATION
 # ==========================================
 MONGO_URI = st.secrets["MONGO_URI"]
 
@@ -229,7 +208,7 @@ cloudinary.config(
 )
 
 # ==========================================
-# 3. HEADLESS API ROUTER
+# 4. HEADLESS API ROUTER
 # ==========================================
 api_req_key = st.query_params.get("api_key")
 if api_req_key:
@@ -315,9 +294,8 @@ if api_req_key:
         
     st.stop()
 
-
 # ==========================================
-# 4. UTILITIES & SECURITY FUNCTIONS
+# 5. UTILITIES & SECURITY FUNCTIONS
 # ==========================================
 def hash_password(password):
     pwd_str = str(password).strip()
@@ -398,7 +376,7 @@ def send_otp_email(receiver_email, otp):
         return False
 
 # ==========================================
-# 5. NATIVE GESTURE ROUTING SYSTEM
+# 6. ROUTING & STATE MANAGEMENT
 # ==========================================
 def get_nav_link(page=None, view=None, tab=None, folder=None, story_group=None, story_idx=None, lightbox_idx=None, profile_hub=None, ai_chat=None, react=None, action=None, file_id=None):
     params = []
@@ -440,7 +418,7 @@ if not st.session_state.logged_in and "session" in st.query_params:
         st.session_state.username = user["username"]
 
 # ==========================================
-# 6. PRE-RENDER ACTION INTERCEPTORS
+# 7. PRE-RENDER INTERCEPTORS
 # ==========================================
 if st.session_state.logged_in:
     if "action" in st.query_params and "file_id" in st.query_params:
@@ -500,7 +478,7 @@ if st.session_state.logged_in:
         st.rerun()
 
 # ==========================================
-# 7. TIME-SEEDED DETERMINISTIC ENGINE
+# 8. DETERMINISTIC STORY ENGINE
 # ==========================================
 if st.session_state.logged_in:
     time_window = int(time.time() / 300) 
@@ -542,7 +520,7 @@ if st.session_state.logged_in:
     random.seed() 
 
 # ==========================================
-# 8. DIALOG FUNCTIONS
+# 9. DIALOGS & OVERLAYS
 # ==========================================
 @st.dialog("⚡ Developer API Access")
 def developer_api_dialog(folder_id_str):
@@ -686,9 +664,6 @@ def find_duplicates_dialog(folder_id):
                 time.sleep(2.5)
                 st.rerun()
 
-# ==========================================
-# 10. MUTEX FULL-SCREEN OVERLAYS
-# ==========================================
 def render_share_media_overlay(target_data, mode):
     st.markdown("<style>header {display: none;} .block-container {padding: 3rem 1rem !important; max-width: 800px;}</style>", unsafe_allow_html=True)
     c1, c2 = st.columns([10, 1])
@@ -906,11 +881,11 @@ def render_profile_hub_overlay():
                     st.success("Profile Updated!"); time.sleep(1); st.rerun()
             
             st.markdown("<hr>", unsafe_allow_html=True)
-            st.markdown("### 🛠️ Fix Blurred Photos")
-            st.info("If your safe photos were accidentally blurred by a previous bug, click here to rescan and fix them.")
+            st.markdown("### 🛠️ Fix Content Filtering")
+            st.info("If your safe photos were previously blurred, click here to rescan and unblur them.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Analyzing all media with the Updated AI Engine..."):
+                with st.spinner("Analyzing all media with the Production AI Engine..."):
                     updated_count = 0
                     for f in files_col.find({"username": st.session_state.username}):
                         try:
@@ -1075,13 +1050,12 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     close_search = f"?page=app&folder={safe_folder_id}&session={session_token}"
     safe_url = html.escape(file['url'])
 
-    # Lightbox displays the image/video completely unblurred
+    # Lightbox displays the image/video completely unblurred for full screen view
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
 
-    # DYNAMIC MENU: Purely automated, no manual override options.
     action_html = f'''
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
@@ -1141,7 +1115,6 @@ def render_story_fullscreen(group_idx, story_idx):
     close_search = f"?page=app&folder=root&session={session_token}"
     safe_url = html.escape(item["url"])
 
-    # Full screen story mode shows completely unblurred media
     media_element = f"<img id='st-media' src='{safe_url}' style='max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; transition: filter 0.3s, transform 0.3s;'>" if item['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 100%; max-height: 100%; object-fit: contain;'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
@@ -1195,7 +1168,6 @@ if not st.session_state.logged_in:
         st.query_params["page"] = "landing"
         st.rerun()
 
-    # Z-index strictly 0, pointer events none.
     wallpaper_html = '''
     <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; overflow: hidden; background: #000; pointer-events: none;">
         <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
@@ -1682,7 +1654,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                                     st.error(f"❌ Upload Blocked: Video '{html.escape(file.name)}' was identified as sensitive (NSFW) content and is not permitted.")
                                                     continue
 
-                                        # Only save to DB if it passes all filters
+                                        # Save to DB if it passes all filters
                                         files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "is_flagged": False, "tag": "", "tag_time": 0})
                                     except Exception as e: 
                                         st.error(f"Failed to upload {html.escape(file.name)}.")
