@@ -54,107 +54,85 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
-    model_path = 'custom_nsfw_model.h5'
-    gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd" 
+    # We use a new filename to bypass any corrupted github files lingering in the cache
+    model_path = 'verified_nsfw_model.h5'
+    gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
-        print("Downloading real AI model from secure cloud storage via gdown...")
+        print("Downloading AI model directly from User's Google Drive link...")
         try:
-            url = f"https://drive.google.com/uc?id={gdrive_file_id}"
-            gdown.download(url, model_path, quiet=False)
-        except Exception as e: 
-            print(f"Gdown failed: {e}")
+            gdown.download(id=gdrive_file_id, output=model_path, quiet=False)
+        except Exception as e:
+            return None, f"Drive Download Failed: {str(e)}"
 
     try:
-        return tf.keras.models.load_model(model_path, compile=False)
+        model = tf.keras.models.load_model(model_path, compile=False)
+        return model, "ONLINE"
     except Exception as e:
-        print(f"Failed to load AI model: {e}")
-        return None
+        return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model = load_nsfw_model()
+safety_model, model_status = load_nsfw_model()
 
 def calculate_skin_ratio(pil_img):
-    """Advanced Mathematical fallback to verify skin clusters via RGB vector analysis."""
+    """Fallback mathematical skin detection"""
     img = pil_img.resize((150, 150), Image.Resampling.NEAREST)
     arr = np.array(img, dtype=np.int32)
-    
-    R = arr[:, :, 0]
-    G = arr[:, :, 1]
-    B = arr[:, :, 2]
+    R, G, B = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
     
     max_rgb = np.maximum(R, np.maximum(G, B))
     min_rgb = np.minimum(R, np.minimum(G, B))
     
-    # Advanced Skin Color Bounding Rules
     rule1 = (R > 95) & (G > 40) & (B > 20)
     rule2 = (max_rgb - min_rgb) > 15
     rule3 = np.abs(R - G) > 15
     rule4 = (R > G) & (R > B)
     
-    # Secondary shadow/highlight skin rules
-    rule5 = (R > 220) & (G > 210) & (B > 170) & (np.abs(R - G) <= 15) & (R > B) & (G > B)
-    
-    skin_mask = (rule1 & rule2 & rule3 & rule4) | rule5
+    skin_mask = rule1 & rule2 & rule3 & rule4
     return np.mean(skin_mask)
 
 def is_safe_content(file_bytes, model):
-    """Bulletproof logic: If AI fails, use Math. If AI succeeds, use both."""
+    """Deep inspection fixing the inversion bug."""
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
-        
-        # 1. GROUND TRUTH: Mathematical Skin Detection
         skin_ratio = calculate_skin_ratio(pil_img)
         
-        # FAILSAFE MODE: If AI Model is offline, rely purely on deep mathematical analysis
+        # If model is offline, fail open (safe) unless it's overwhelmingly obvious skin
         if model is None:
-            if skin_ratio > 0.30:  # If more than 30% of the image is raw skin tone
-                return False       # Block / Flag as NSFW
-            return True            # Safe
+            if skin_ratio > 0.55:  
+                return False 
+            return True            
             
-        # 2. SHAPE DETECTION FOR AI
         input_shape = model.input_shape
         target_size = (224, 224) 
         if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
             target_size = (input_shape[1], input_shape[2])
             
         img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
-        
-        # 3. AUTO-CALIBRATING NORMALIZATION
         norm1 = np.expand_dims(img_array / 255.0, axis=0) 
-        norm2 = np.expand_dims((img_array / 127.5) - 1.0, axis=0) 
         
-        pred1 = model.predict(norm1, verbose=0)[0]
-        pred2 = model.predict(norm2, verbose=0)[0]
-        
-        pred = pred1 if np.max(pred1) > np.max(pred2) else pred2
+        pred = model.predict(norm1, verbose=0)[0]
         is_nsfw_ai = False
         
-        # 4. NEURAL NETWORK PARSING
+        # Determine exact NSFW trigger
         if len(pred) == 5:
+            # 0: drawings, 1: hentai, 2: neutral, 3: porn, 4: sexy
             nsfw_score = pred[1] + pred[3] + pred[4]
-            is_nsfw_ai = nsfw_score >= 0.65
+            is_nsfw_ai = nsfw_score >= 0.60
         elif len(pred) == 2:
-            if pred[0] > 0.65 and skin_ratio > 0.15: is_nsfw_ai = True
-            elif pred[1] > 0.65 and skin_ratio > 0.15: is_nsfw_ai = True
+            # Standard binary: Index 0 is Safe, Index 1 is NSFW
+            is_nsfw_ai = pred[1] > 0.60
         elif len(pred) == 1:
-            is_nsfw_ai = pred[0] >= 0.65
+            is_nsfw_ai = pred[0] > 0.60
             
-        # 5. HYBRID GUARDRAILS (Stops AI Hallucinations)
-        if is_nsfw_ai:
-            # AI says NSFW, but zero math skin exists (False Positive override)
-            if skin_ratio < 0.03 and len(pred) != 5:
-                return True 
-            return False # Confirmed NSFW
-        else:
-            # AI says Safe, but massive math skin exists (False Negative override)
-            if skin_ratio > 0.45:
-                return False 
-            return True # Safe
+        # Stop false positive blurring of sunsets/objects
+        if is_nsfw_ai and skin_ratio < 0.02 and len(pred) != 5:
+            is_nsfw_ai = False
             
+        return not is_nsfw_ai # Return True if Safe, False if NSFW
+        
     except Exception as e:
         print(f"Prediction Crash: {e}")
-        # Final strict fallback if file is corrupted
-        return False 
+        return True 
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -854,13 +832,12 @@ def render_profile_hub_overlay():
                     st.success("Profile Updated!"); time.sleep(1); st.rerun()
             
             st.markdown("<hr>", unsafe_allow_html=True)
-            st.markdown("### Safety Controls")
-            st.write("Force a deep re-scan of ALL media using the Automated Hybrid AI Engine.")
+            st.markdown("### 🛠️ Fix Blurred Photos")
+            st.info("If your safe photos were accidentally blurred by a previous bug, click here to rescan and fix them.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
-                with st.spinner("Analyzing all media with Automated Hybrid AI Engine..."):
+                with st.spinner("Analyzing all media with the Updated AI Engine..."):
                     updated_count = 0
-                    
                     for f in files_col.find({"username": st.session_state.username}):
                         try:
                             check_url = f["url"]
@@ -873,8 +850,7 @@ def render_profile_hub_overlay():
                                 files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                                 updated_count += 1
                         except Exception: pass
-                        
-                    st.success(f"Deep scan complete! Re-evaluated {updated_count} files.")
+                    st.success(f"Deep scan complete! Re-evaluated {updated_count} files. Your safe photos are fixed.")
 
         with c2:
             st.markdown("### Reaction Analytics")
@@ -1025,7 +1001,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     close_search = f"?page=app&folder={safe_folder_id}&session={session_token}"
     safe_url = html.escape(file['url'])
 
-    # Lightbox displays the image/video completely unblurred to fulfill: "full screen mood open and show the data"
+    # Lightbox displays the image/video completely unblurred
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
@@ -1514,8 +1490,10 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     st.markdown(header_html.replace('\n', ''), unsafe_allow_html=True)
     st.write("<br>", unsafe_allow_html=True) 
 
-    if safety_model is None:
-        st.warning("⚠️ AI Model is temporarily offline. Falling back to the Advanced Mathematical Skin-Detection Algorithm to maintain security.")
+    if safety_model is not None:
+        st.success("✅ AI Engine is ONLINE. (Note: If your safe photos are currently blurred from a past error, go to Profile Hub and click 'Force Deep Scan' to fix them).")
+    else:
+        st.error(f"🚨 AI MODEL OFFLINE: {model_status}")
     
     if is_root and st.session_state.story_groups:
         st.markdown(f'<h3 style="margin-left: 40px; margin-bottom: 10px;">Stories</h3>', unsafe_allow_html=True)
