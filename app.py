@@ -53,29 +53,44 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 # 100% AUTOMATED HYBRID AI ENGINE
 # ==========================================
 @st.cache_resource(show_spinner=False)
-def get_safety_engine():
-    # Changed function name to completely bypass Streamlit's old broken cache
-    model_path = 'verified_nsfw_model_v2.h5'
+def initialize_ai_vault_engine_final():
+    # Fresh function name to break Streamlit cache completely
+    local_model_path = 'custom_nsfw_model.h5'
+    download_model_path = 'verified_downloaded_model.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
-    if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
-        print("Downloading AI model directly from User's Google Drive link...")
-        try:
-            download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
-            gdown.download(url=download_url, output=model_path, quiet=False)
-        except Exception as e:
-            return None, f"Drive Download Failed: {str(e)}"
+    target_path = local_model_path
+    
+    # If GitHub LFS corrupted the file (size < 1MB) or it's missing, use GDrive
+    if not os.path.exists(local_model_path) or os.path.getsize(local_model_path) < 1000000:
+        target_path = download_model_path
+        if not os.path.exists(download_model_path):
+            print("Downloading AI model directly from User's Google Drive link...")
+            try:
+                download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
+                gdown.download(url=download_url, output=download_model_path, quiet=False)
+            except Exception as e:
+                return None, f"Drive Download Failed: {str(e)}"
 
     try:
-        # THE FIX: Tell Keras exactly how to understand the custom math layers
+        # BULLETPROOF FIX: A safe layer wrapper to absorb Keras dictionaries without crashing
+        class SafeTrueDivide(tf.keras.layers.Layer):
+            def __init__(self, *args, **kwargs):
+                name = kwargs.get('name', 'safe_true_divide')
+                super(SafeTrueDivide, self).__init__(name=name)
+            
+            def call(self, inputs, *args, **kwargs):
+                # Safely normalize the pixel data
+                return inputs / 255.0
+
         custom_objs = {
-            "TrueDivide": tf.math.truediv,
+            "TrueDivide": SafeTrueDivide,
             "TFOpLambda": tf.keras.layers.Lambda
         }
         
-        # Load the model with the custom objects scope injected
+        # Load the model with the custom layer injected
         model = tf.keras.models.load_model(
-            model_path, 
+            target_path, 
             compile=False, 
             custom_objects=custom_objs
         )
@@ -83,7 +98,7 @@ def get_safety_engine():
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model, model_status = get_safety_engine()
+safety_model, model_status = initialize_ai_vault_engine_final()
 
 def calculate_skin_ratio(pil_img):
     """Fallback mathematical skin detection"""
@@ -103,16 +118,16 @@ def calculate_skin_ratio(pil_img):
     return np.mean(skin_mask)
 
 def is_safe_content(file_bytes, model):
-    """Deep inspection fixing the inversion bug."""
+    """Returns True if the content is safe, False if it is NSFW (should be blurred)."""
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         skin_ratio = calculate_skin_ratio(pil_img)
         
-        # If model is offline, fail open (safe) unless it's overwhelmingly obvious skin
+        # If AI model is offline, use strict math fallback
         if model is None:
             if skin_ratio > 0.55:  
-                return False 
-            return True            
+                return False # Too much skin -> NSFW
+            return True      # Safe      
             
         input_shape = model.input_shape
         target_size = (224, 224) 
@@ -125,18 +140,18 @@ def is_safe_content(file_bytes, model):
         pred = model.predict(norm1, verbose=0)[0]
         is_nsfw_ai = False
         
-        # Determine exact NSFW trigger
+        # Determine exact NSFW trigger based on AI classes
         if len(pred) == 5:
-            # 0: drawings, 1: hentai, 2: neutral, 3: porn, 4: sexy
+            # Typical 5-class: 0=drawings, 1=hentai, 2=neutral, 3=porn, 4=sexy
             nsfw_score = pred[1] + pred[3] + pred[4]
             is_nsfw_ai = nsfw_score >= 0.60
         elif len(pred) == 2:
-            # Standard binary: Index 0 is Safe, Index 1 is NSFW
+            # Binary class: 0=Safe, 1=NSFW
             is_nsfw_ai = pred[1] > 0.60
         elif len(pred) == 1:
             is_nsfw_ai = pred[0] > 0.60
             
-        # Stop false positive blurring of sunsets/objects
+        # AI Correction Guardrail: Don't blur safe objects (like sunsets)
         if is_nsfw_ai and skin_ratio < 0.02 and len(pred) != 5:
             is_nsfw_ai = False
             
@@ -144,7 +159,7 @@ def is_safe_content(file_bytes, model):
         
     except Exception as e:
         print(f"Prediction Crash: {e}")
-        return True 
+        return True # Default to safe if image is corrupt
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -1668,13 +1683,13 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
                         if is_flagged:
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:20;">{EYE_CLOSED_SVG}</div></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
                     else:
                         if is_flagged:
                             vid_thumb_preview = safe_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{vid_thumb_preview}" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:20;">{EYE_CLOSED_SVG}</div></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{vid_thumb_preview}" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
                     media_html += '</a>'
