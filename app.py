@@ -1,3 +1,6 @@
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 import streamlit as st
 import streamlit.components.v1 as components
 from pymongo import MongoClient
@@ -19,8 +22,9 @@ import secrets
 import json
 import io
 import requests
-import os
+import urllib.request
 import gdown
+import h5py
 
 # ML Libraries for Data Protection Model
 import tensorflow as tf
@@ -51,10 +55,43 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 # ==========================================
 # 100% AUTOMATED HYBRID AI ENGINE
 # ==========================================
+
+# CUSTOM LAYER: Prevents Keras crash when dividing pixels
+class SafeTrueDivide(tf.keras.layers.Layer):
+    def __init__(self, **kwargs):
+        clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
+        super(SafeTrueDivide, self).__init__(**clean_kwargs)
+    def call(self, inputs, *args, **kwargs):
+        return inputs / 255.0
+
+def patch_h5_dna(filepath):
+    """MAGIC FIX: Opens the .h5 file and scrubs Keras 3 poison keywords from its DNA."""
+    try:
+        with h5py.File(filepath, 'r+') as f:
+            if 'model_config' in f.attrs:
+                config_str = f.attrs['model_config']
+                if isinstance(config_str, bytes):
+                    config_str = config_str.decode('utf-8')
+                config = json.loads(config_str)
+                
+                def scrub_node(node):
+                    if isinstance(node, dict):
+                        if 'batch_shape' in node:
+                            node['batch_input_shape'] = node.pop('batch_shape')
+                        if 'optional' in node:
+                            node.pop('optional')
+                        for v in node.values(): scrub_node(v)
+                    elif isinstance(node, list):
+                        for item in node: scrub_node(item)
+                        
+                scrub_node(config)
+                f.attrs['model_config'] = json.dumps(config).encode('utf-8')
+    except Exception as e:
+        print("DNA Patching bypassed/failed:", e)
+
 @st.cache_resource(show_spinner=False)
-def load_safety_engine_clean():
-    # Since we reverted to TF 2.15, standard Keras loading works flawlessly
-    model_path = 'final_model_v6.h5'
+def initialize_vault_ai_engine_v7():
+    model_path = 'final_master_model_v7.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
@@ -65,13 +102,22 @@ def load_safety_engine_clean():
         except Exception as e:
             return None, f"Drive Download Failed: {str(e)}"
 
+    # 1. Patch the DNA of the file before TF touches it
+    patch_h5_dna(model_path)
+
     try:
-        model = tf.keras.models.load_model(model_path, compile=False)
+        # 2. Inject custom translation layers
+        custom_objs = {
+            "TrueDivide": SafeTrueDivide,
+            "TFOpLambda": tf.keras.layers.Lambda
+        }
+        # 3. Load cleanly
+        model = tf.keras.models.load_model(model_path, compile=False, custom_objects=custom_objs)
         return model, "ONLINE"
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model, model_status = load_safety_engine_clean()
+safety_model, model_status = initialize_vault_ai_engine_v7()
 
 def calculate_skin_ratio(pil_img):
     """Fallback mathematical skin detection"""
@@ -91,16 +137,14 @@ def calculate_skin_ratio(pil_img):
     return np.mean(skin_mask)
 
 def is_safe_content(file_bytes, model):
-    """Returns True if the content is safe, False if it is NSFW (should be blurred)."""
+    """Returns True if the content is safe, False if it is NSFW."""
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         skin_ratio = calculate_skin_ratio(pil_img)
         
-        # If AI model is offline, use strict math fallback
         if model is None:
-            if skin_ratio > 0.55:  
-                return False # Too much skin -> NSFW
-            return True      # Safe      
+            if skin_ratio > 0.55: return False 
+            return True     
             
         input_shape = model.input_shape
         target_size = (224, 224) 
@@ -108,31 +152,30 @@ def is_safe_content(file_bytes, model):
             target_size = (input_shape[1], input_shape[2])
             
         img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
-        norm1 = np.expand_dims(img_array / 255.0, axis=0) 
         
-        pred = model.predict(norm1, verbose=0)[0]
+        # Pass RAW array because the SafeTrueDivide layer handles the normalization internally
+        raw_array = np.expand_dims(img_array, axis=0) 
+        
+        pred = model.predict(raw_array, verbose=0)[0]
         is_nsfw_ai = False
         
-        # Determine exact NSFW trigger based on AI classes
         if len(pred) == 5:
-            # 0: drawings, 1: hentai, 2: neutral, 3: porn, 4: sexy
             nsfw_score = pred[1] + pred[3] + pred[4]
             is_nsfw_ai = nsfw_score >= 0.60
         elif len(pred) == 2:
-            # Binary class: 0=Safe, 1=NSFW
             is_nsfw_ai = pred[1] > 0.60
         elif len(pred) == 1:
             is_nsfw_ai = pred[0] > 0.60
             
-        # AI Correction Guardrail: Don't blur safe objects (like sunsets)
+        # Guardrail: Don't blur safe objects 
         if is_nsfw_ai and skin_ratio < 0.02 and len(pred) != 5:
             is_nsfw_ai = False
             
-        return not is_nsfw_ai # Return True if Safe, False if NSFW
+        return not is_nsfw_ai
         
     except Exception as e:
         print(f"Prediction Crash: {e}")
-        return True # Default to safe if image is corrupt
+        return True 
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
