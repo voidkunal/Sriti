@@ -1,5 +1,4 @@
 import os
-os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 import streamlit as st
@@ -139,9 +138,8 @@ def is_safe_content(file_bytes, model):
 # ==========================================
 try:
     MONGO_URI = st.secrets["MONGO_URI"]
-    # Added ServerSelectionTimeout to prevent silent app freezing
     client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
-    client.admin.command('ping') # Fast check to ensure it's actually connected
+    client.admin.command('ping') 
 except Exception as e:
     st.error(f"🚨 Critical Database Error: Cannot connect to MongoDB. Check your MONGO_URI and ensure your IP is whitelisted in Atlas. Details: {str(e)}")
     st.stop()
@@ -321,7 +319,6 @@ def send_otp_email(receiver_email, otp):
         body = f"Hello,\n\nYour secure 6-digit access code is: {otp}\n\nThis code will expire in 10 minutes. If you did not request this, secure your account immediately."
         msg.attach(MIMEText(body, 'plain'))
         
-        # Added explicit timeout to prevent infinite hanging
         server = smtplib.SMTP('smtp.gmail.com', 587, timeout=10)
         server.starttls()
         server.login(sender_email, sender_password)
@@ -332,7 +329,6 @@ def send_otp_email(receiver_email, otp):
         st.error("🚨 Email Auth Failed: Google blocked the login. Ensure you are using a 16-letter Google 'App Password' inside secrets.toml, NOT your normal Gmail password.")
         return False
     except Exception as e:
-        # This will now print the EXACT reason it fails (Network, Port Block, etc.)
         st.error(f"🚨 Email Sending Failed: {str(e)}")
         return False
 
