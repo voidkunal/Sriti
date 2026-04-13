@@ -55,7 +55,7 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 @st.cache_resource(show_spinner=False)
 def get_safety_engine():
     # Changed function name to completely bypass Streamlit's old broken cache
-    model_path = 'verified_nsfw_model.h5'
+    model_path = 'verified_nsfw_model_v2.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
@@ -67,7 +67,18 @@ def get_safety_engine():
             return None, f"Drive Download Failed: {str(e)}"
 
     try:
-        model = tf.keras.models.load_model(model_path, compile=False)
+        # THE FIX: Tell Keras exactly how to understand the custom math layers
+        custom_objs = {
+            "TrueDivide": tf.math.truediv,
+            "TFOpLambda": tf.keras.layers.Lambda
+        }
+        
+        # Load the model with the custom objects scope injected
+        model = tf.keras.models.load_model(
+            model_path, 
+            compile=False, 
+            custom_objects=custom_objs
+        )
         return model, "ONLINE"
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
