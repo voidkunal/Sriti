@@ -1,5 +1,5 @@
 import os
-# Force TensorFlow to use the classic Keras 2 engine to minimize architecture conflicts
+# CRITICAL: Force TensorFlow into Legacy mode BEFORE imports to isolate Keras 2
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
@@ -33,25 +33,19 @@ import numpy as np
 # ==========================================
 # 0. TENSORFLOW KERNEL MONKEY-PATCH
 # ==========================================
-# This is the ultimate fix for Keras 3 -> Keras 2 backward compatibility.
-# We intercept the InputLayer initialization and translate Keras 3 kwargs to Keras 2 on the fly.
+# Overrides InputLayer initialization to translate Keras 3 kwargs to Keras 2 on the fly
 _original_input_init = tf.keras.layers.InputLayer.__init__
 
 def _patched_input_init(self, *args, **kwargs):
-    # 1. Translate Keras 3 'batch_shape' to Keras 2 'batch_input_shape'
     if 'batch_shape' in kwargs:
         kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
-    
-    # 2. Strip Keras 3 'optional' argument completely
     kwargs.pop('optional', None)
     
-    # 3. Translate Keras 3 DTypePolicy dictionaries back to raw strings
     if 'dtype' in kwargs and isinstance(kwargs['dtype'], dict):
         kwargs['dtype'] = kwargs['dtype'].get('config', {}).get('name', 'float32')
         
     _original_input_init(self, *args, **kwargs)
 
-# Apply the patch directly to the TensorFlow backend
 tf.keras.layers.InputLayer.__init__ = _patched_input_init
 
 
@@ -79,38 +73,39 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 # 2. BULLETPROOF HYBRID AI ENGINE
 # ==========================================
 
+class Keras3DTypePolicy:
+    """Intercepts the Keras 3 DTypePolicy object and instantly returns a standard string for Keras 2"""
+    def __new__(cls, name='float32', **kwargs):
+        return str(name)
+
 class SafeTrueDivide(tf.keras.layers.Layer):
-    """Safely handles arbitrary division layers (like image/255.0) to prevent crash"""
+    """Safely handles mathematical division layers without crashing on kwargs"""
     def __init__(self, **kwargs):
         clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
         super(SafeTrueDivide, self).__init__(**clean_kwargs)
-        
     def call(self, inputs, *args, **kwargs):
         divisor = 255.0
         if args: divisor = args[0]
         elif 'y' in kwargs: divisor = kwargs['y']
         return inputs / divisor
-        
     @classmethod
     def from_config(cls, config):
         return cls(name=config.get('name'))
 
 class SafeAugmentationPassThrough(tf.keras.layers.Layer):
-    """Intercepts all Keras 3 Augmentation layers and completely ignores their incompatible config dictionaries."""
+    """Bypasses unsupported Data Augmentation kwargs (value_range, data_format) by stripping them entirely"""
     def __init__(self, **kwargs):
         clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
         super(SafeAugmentationPassThrough, self).__init__(**clean_kwargs)
-
     def call(self, inputs, *args, **kwargs):
         return inputs
-
     @classmethod
     def from_config(cls, config):
         return cls(name=config.get('name'))
 
 @st.cache_resource(show_spinner=False)
-def get_production_ai_engine():
-    model_path = 'final_production_vault_model.h5'
+def initialize_vault_ai_engine_v11():
+    model_path = 'final_production_model_v11.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
@@ -122,8 +117,9 @@ def get_production_ai_engine():
             return None, f"Cloud Download Failed: {str(e)}"
 
     try:
-        # Map ALL known problematic Keras 3 layers to our safe interceptor classes
+        # Complete translation dictionary to isolate the model from Keras 3 objects
         custom_objs = {
+            "DTypePolicy": Keras3DTypePolicy,
             "TrueDivide": SafeTrueDivide,
             "TFOpLambda": tf.keras.layers.Lambda,
             "RandomContrast": SafeAugmentationPassThrough,
@@ -140,7 +136,7 @@ def get_production_ai_engine():
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model, model_status = get_production_ai_engine()
+safety_model, model_status = initialize_vault_ai_engine_v11()
 
 def calculate_skin_ratio(pil_img):
     """Mathematical fallback algorithm to calculate exposed skin pixels via RGB bounds."""
@@ -165,12 +161,10 @@ def is_safe_content(file_bytes, model):
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         skin_ratio = calculate_skin_ratio(pil_img)
         
-        # Failsafe Mode: If model crashed, rely purely on mathematics
         if model is None:
             if skin_ratio > 0.55: return False 
             return True     
             
-        # AI Mode: Prepare Image
         input_shape = model.input_shape
         target_size = (224, 224) 
         if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
@@ -179,13 +173,10 @@ def is_safe_content(file_bytes, model):
         img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
         raw_array = np.expand_dims(img_array, axis=0) 
         
-        # Execute Prediction
         pred = model.predict(raw_array, verbose=0)[0]
         is_nsfw_ai = False
         
-        # Determine Classification
         if len(pred) == 5:
-            # Assumes standard 5-class (0: drawings, 1: hentai, 2: neutral, 3: porn, 4: sexy)
             nsfw_score = pred[1] + pred[3] + pred[4]
             is_nsfw_ai = nsfw_score >= 0.60
         elif len(pred) == 2:
@@ -193,8 +184,6 @@ def is_safe_content(file_bytes, model):
         elif len(pred) == 1:
             is_nsfw_ai = pred[0] > 0.60
             
-        # Hybrid Guardrail: AI says NSFW, but mathematical skin detection is near zero.
-        # This prevents false positives on safe objects.
         if is_nsfw_ai and skin_ratio < 0.02 and len(pred) != 5:
             is_nsfw_ai = False
             
@@ -202,7 +191,7 @@ def is_safe_content(file_bytes, model):
         
     except Exception as e:
         print(f"Prediction Process Error: {e}")
-        return True # Default to allow/safe if the image parsing fails internally
+        return True 
 
 # ==========================================
 # 3. DATABASE & CLOUD CONFIGURATION
