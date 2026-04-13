@@ -44,13 +44,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# SVG Icons for UI
+EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
+EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
+
 # ==========================================
 # 100% AUTOMATED HYBRID AI ENGINE
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
     model_path = 'custom_nsfw_model.h5'
-    gdrive_file_id = "1tNMbShHnVUBEjW-7O89SpeQMQzx2E5jw"  # Fallback if GitHub corrupts the file
+    gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"  # Fallback if GitHub corrupts the file
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
         print("Downloading real AI model from secure cloud storage...")
@@ -197,7 +201,7 @@ if api_req_key:
                         media_html += f'''
                         <div style="position:relative; width:250px; height:380px; flex: 0 0 auto; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 16px rgba(0,0,0,0.3);">
                             <img src="{safe_url}" class="slide-media" style="width:100%; height:100%; object-fit:cover; filter: blur(25px); transform: scale(1.1); cursor: pointer;" onclick="this.style.filter='none'; this.style.transform='scale(1)'" onmouseleave="this.style.filter='blur(25px)'; this.style.transform='scale(1.1)'">
-                            <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:50px; pointer-events:none; text-shadow: 0 2px 5px rgba(0,0,0,0.5);">🙈</div>
+                            <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); pointer-events:none; z-index:20;">{EYE_CLOSED_SVG_LARGE}</div>
                         </div>'''
                     else:
                         media_html += f'<img src="{safe_url}" class="slide-media" style="flex: 0 0 auto; width: 250px; height: 380px; object-fit: cover; border-radius: 12px; scroll-snap-align: center; box-shadow: 0 8px 16px rgba(0,0,0,0.3); transition: transform 0.3s ease;">'
@@ -1002,7 +1006,6 @@ def render_lightbox_fullscreen(idx, folder_id_str):
 
     file = files[idx]
     fid = str(file["_id"])
-    is_flagged = file.get("is_flagged", False)
     has_next = "true" if idx < len(files) - 1 else "false"
     has_prev = "true" if idx > 0 else "false"
     
@@ -1013,12 +1016,8 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     close_search = f"?page=app&folder={safe_folder_id}&session={session_token}"
     safe_url = html.escape(file['url'])
 
-    blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
-    
-    # Safe temporary reveal for flagged photos (NO permanent unflagging logic)
-    reveal_btn = f"<button onclick=\"document.getElementById('lb-media').style.filter='none'; document.getElementById('lb-media').style.transform='scale(1)'; this.style.display='none';\" style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5);'>👁️ Reveal Sensitive Content</button>" if is_flagged else ""
-
-    media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
+    # Lightbox displays the image/video completely unblurred to fulfill: "full screen mood open and show the data"
+    media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
@@ -1053,7 +1052,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
         
     current_react = f"<div style='position:absolute; top:25px; left:25px; font-size: 32px; z-index:10000000;'>{html.escape(file.get('tag', ''))}</div>" if file.get("tag") else ""
 
-    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>header {{display: none !important;}} .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; left: 25px;">✕</a>{current_react}{action_html}{react_html} {reveal_btn} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
+    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>header {{display: none !important;}} .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; left: 25px;">✕</a>{current_react}{action_html}{react_html} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
     st.stop()
 
@@ -1083,12 +1082,8 @@ def render_story_fullscreen(group_idx, story_idx):
     close_search = f"?page=app&folder=root&session={session_token}"
     safe_url = html.escape(item["url"])
 
-    is_flagged = item.get("is_flagged", False)
-    blur_css = "filter: blur(30px); transform: scale(1.1);" if is_flagged else ""
-    
-    reveal_btn = f"<button onclick=\"document.getElementById('st-media').style.filter='none'; document.getElementById('st-media').style.transform='scale(1)'; this.style.display='none';\" style='position:absolute; top:80px; left:50%; transform:translateX(-50%); z-index:10000002; padding: 12px 24px; border-radius: 30px; background: rgba(0,0,0,0.8); color: white; border: 1px solid rgba(255,255,255,0.4); font-weight: bold; cursor: pointer; backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(0,0,0,0.5);'>👁️ Reveal Sensitive Content</button>" if is_flagged else ""
-
-    media_element = f"<img id='st-media' src='{safe_url}' style='max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; transition: filter 0.3s, transform 0.3s; {blur_css}'>" if item['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 100%; max-height: 100%; object-fit: contain;'></video>"
+    # Full screen story mode shows completely unblurred media
+    media_element = f"<img id='st-media' src='{safe_url}' style='max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; transition: filter 0.3s, transform 0.3s;'>" if item['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 100%; max-height: 100%; object-fit: contain;'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
     next_button = f"<a href='{next_search}' target='_self' class='liquid-btn' style='right: 4%;'>▶</a>" if has_next == "true" else ""
@@ -1122,7 +1117,6 @@ def render_story_fullscreen(group_idx, story_idx):
         </style>
         <a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; right: 25px;">✕</a>
         {react_html}
-        {reveal_btn}
         <div style="position: absolute; top: 30px; color: white; font-family: sans-serif; font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.5); z-index: 10000000; margin-left: 80px;">{html.escape(group['label'])}</div>
         <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a>
         <a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a>
@@ -1471,7 +1465,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     unscanned_files = list(files_col.find({"username": st.session_state.username, "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
-        with st.spinner("🤖 Auto-scanning media with Automated Hybrid AI..."):
+        with st.spinner("🤖 Auto-scanning legacy media with Automated Hybrid AI..."):
             for f in unscanned_files:
                 try:
                     check_url = f["url"]
@@ -1607,12 +1601,12 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     file_bytes = file.getvalue()
                                     file.seek(0)
                                     
-                                    is_flagged = False
-                                    
+                                    # Upload Block logic
                                     if r_type == "image":
                                         is_flagged = not is_safe_content(file_bytes, safety_model)
                                         if is_flagged:
-                                            st.warning(f"⚠️ '{html.escape(file.name)}' was flagged by AI as sensitive. It has been synced and blurred.")
+                                            st.error(f"❌ Upload Blocked: '{html.escape(file.name)}' contains sensitive (NSFW) content and is not permitted.")
+                                            continue
                                         
                                     try:
                                         res = cloudinary.uploader.upload_large(file, resource_type=r_type, chunk_size=20000000) if file.size > 50000000 else cloudinary.uploader.upload(file, resource_type=r_type)
@@ -1623,9 +1617,12 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                             if thumb_resp.status_code == 200:
                                                 is_flagged = not is_safe_content(thumb_resp.content, safety_model)
                                                 if is_flagged:
-                                                    st.warning(f"⚠️ Video '{html.escape(file.name)}' was flagged by AI as sensitive. It has been synced and blurred.")
+                                                    cloudinary.uploader.destroy(res["public_id"], resource_type="video")
+                                                    st.error(f"❌ Upload Blocked: Video '{html.escape(file.name)}' contains sensitive (NSFW) content and is not permitted.")
+                                                    continue
 
-                                        files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "is_flagged": is_flagged, "tag": "", "tag_time": 0})
+                                        # Only save to DB if it passes all filters
+                                        files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "is_flagged": False, "tag": "", "tag_time": 0})
                                     except Exception as e: 
                                         st.error(f"Failed to upload {html.escape(file.name)}.")
                                         
@@ -1672,13 +1669,13 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
                         if is_flagged:
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:20;">{EYE_CLOSED_SVG}</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
                     else:
                         if is_flagged:
                             vid_thumb_preview = safe_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{vid_thumb_preview}" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{vid_thumb_preview}" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:20;">{EYE_CLOSED_SVG}</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
                     media_html += '</a>'
