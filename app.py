@@ -21,6 +21,7 @@ import io
 import requests
 import os
 import urllib.request
+import gdown
 
 # ML Libraries for Data Protection Model
 import tensorflow as tf
@@ -54,14 +55,15 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 @st.cache_resource(show_spinner=False)
 def load_nsfw_model():
     model_path = 'custom_nsfw_model.h5'
-    gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"  # Fallback if GitHub corrupts the file
+    gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd" 
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
-        print("Downloading real AI model from secure cloud storage...")
+        print("Downloading real AI model from secure cloud storage via gdown...")
         try:
-            download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
-            urllib.request.urlretrieve(download_url, model_path)
-        except Exception: pass
+            url = f"https://drive.google.com/uc?id={gdrive_file_id}"
+            gdown.download(url, model_path, quiet=False)
+        except Exception as e: 
+            print(f"Gdown failed: {e}")
 
     try:
         return tf.keras.models.load_model(model_path, compile=False)
@@ -72,9 +74,9 @@ def load_nsfw_model():
 safety_model = load_nsfw_model()
 
 def calculate_skin_ratio(pil_img):
-    """Mathematical fallback to verify if the AI is hallucinating."""
-    img = pil_img.resize((100, 100), Image.Resampling.NEAREST)
-    arr = np.array(img, dtype=np.int16)
+    """Advanced Mathematical fallback to verify skin clusters via RGB vector analysis."""
+    img = pil_img.resize((150, 150), Image.Resampling.NEAREST)
+    arr = np.array(img, dtype=np.int32)
     
     R = arr[:, :, 0]
     G = arr[:, :, 1]
@@ -83,25 +85,33 @@ def calculate_skin_ratio(pil_img):
     max_rgb = np.maximum(R, np.maximum(G, B))
     min_rgb = np.minimum(R, np.minimum(G, B))
     
+    # Advanced Skin Color Bounding Rules
     rule1 = (R > 95) & (G > 40) & (B > 20)
     rule2 = (max_rgb - min_rgb) > 15
     rule3 = np.abs(R - G) > 15
     rule4 = (R > G) & (R > B)
     
-    skin_mask = rule1 & rule2 & rule3 & rule4
+    # Secondary shadow/highlight skin rules
+    rule5 = (R > 220) & (G > 210) & (B > 170) & (np.abs(R - G) <= 15) & (R > B) & (G > B)
+    
+    skin_mask = (rule1 & rule2 & rule3 & rule4) | rule5
     return np.mean(skin_mask)
 
 def is_safe_content(file_bytes, model):
-    if model is None:
-        return True 
-        
+    """Bulletproof logic: If AI fails, use Math. If AI succeeds, use both."""
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
         
         # 1. GROUND TRUTH: Mathematical Skin Detection
         skin_ratio = calculate_skin_ratio(pil_img)
         
-        # 2. SHAPE DETECTION
+        # FAILSAFE MODE: If AI Model is offline, rely purely on deep mathematical analysis
+        if model is None:
+            if skin_ratio > 0.30:  # If more than 30% of the image is raw skin tone
+                return False       # Block / Flag as NSFW
+            return True            # Safe
+            
+        # 2. SHAPE DETECTION FOR AI
         input_shape = model.input_shape
         target_size = (224, 224) 
         if input_shape and len(input_shape) >= 3 and input_shape[1] is not None:
@@ -110,7 +120,6 @@ def is_safe_content(file_bytes, model):
         img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
         
         # 3. AUTO-CALIBRATING NORMALIZATION
-        # Tests both standard normalizations and lets the AI pick the one it understands best
         norm1 = np.expand_dims(img_array / 255.0, axis=0) 
         norm2 = np.expand_dims((img_array / 127.5) - 1.0, axis=0) 
         
@@ -125,27 +134,27 @@ def is_safe_content(file_bytes, model):
             nsfw_score = pred[1] + pred[3] + pred[4]
             is_nsfw_ai = nsfw_score >= 0.65
         elif len(pred) == 2:
-            # Only flag if high confidence AND correlates with actual skin tones
             if pred[0] > 0.65 and skin_ratio > 0.15: is_nsfw_ai = True
             elif pred[1] > 0.65 and skin_ratio > 0.15: is_nsfw_ai = True
         elif len(pred) == 1:
             is_nsfw_ai = pred[0] >= 0.65
             
-        # 5. AUTOMATED VERIFICATION GUARDRAILS (Stops Hallucinations)
+        # 5. HYBRID GUARDRAILS (Stops AI Hallucinations)
         if is_nsfw_ai:
-            # AI says it's NSFW. But if the image has almost zero skin (dog, car, sunset), the AI is hallucinating.
+            # AI says NSFW, but zero math skin exists (False Positive override)
             if skin_ratio < 0.03 and len(pred) != 5:
-                return True # Safe (Override False Positive)
+                return True 
             return False # Confirmed NSFW
         else:
-            # AI says it's Safe. But if the image is massive amounts of skin, the AI missed it.
-            if skin_ratio > 0.55:
-                return False # Confirmed NSFW (Override False Negative)
+            # AI says Safe, but massive math skin exists (False Negative override)
+            if skin_ratio > 0.45:
+                return False 
             return True # Safe
             
     except Exception as e:
-        print(f"AI Prediction Crash: {e}")
-        return True # Allows upload to continue smoothly
+        print(f"Prediction Crash: {e}")
+        # Final strict fallback if file is corrupted
+        return False 
 
 # ==========================================
 # 2. DATABASE & CLOUD CONFIGURATION
@@ -1506,7 +1515,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     st.write("<br>", unsafe_allow_html=True) 
 
     if safety_model is None:
-        st.error("🚨 AI MODEL OFFLINE: 'custom_nsfw_model.h5' could not be loaded. Ensure the exact file is uploaded via Git LFS to your GitHub repository and is not corrupted, OR use the Google Drive ID bypass in the code. The filter is currently bypassed.")
+        st.warning("⚠️ AI Model is temporarily offline. Falling back to the Advanced Mathematical Skin-Detection Algorithm to maintain security.")
     
     if is_root and st.session_state.story_groups:
         st.markdown(f'<h3 style="margin-left: 40px; margin-bottom: 10px;">Stories</h3>', unsafe_allow_html=True)
@@ -1601,11 +1610,11 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     file_bytes = file.getvalue()
                                     file.seek(0)
                                     
-                                    # Upload Block logic
+                                    # Strict Upload Block logic
                                     if r_type == "image":
                                         is_flagged = not is_safe_content(file_bytes, safety_model)
                                         if is_flagged:
-                                            st.error(f"❌ Upload Blocked: '{html.escape(file.name)}' contains sensitive (NSFW) content and is not permitted.")
+                                            st.error(f"❌ Upload Blocked: '{html.escape(file.name)}' was identified as sensitive (NSFW) content and is not permitted.")
                                             continue
                                         
                                     try:
@@ -1618,7 +1627,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                                 is_flagged = not is_safe_content(thumb_resp.content, safety_model)
                                                 if is_flagged:
                                                     cloudinary.uploader.destroy(res["public_id"], resource_type="video")
-                                                    st.error(f"❌ Upload Blocked: Video '{html.escape(file.name)}' contains sensitive (NSFW) content and is not permitted.")
+                                                    st.error(f"❌ Upload Blocked: Video '{html.escape(file.name)}' was identified as sensitive (NSFW) content and is not permitted.")
                                                     continue
 
                                         # Only save to DB if it passes all filters
