@@ -1,8 +1,3 @@
-import os
-# CRITICAL: Must be at the very top to force TensorFlow into Legacy mode
-os.environ["TF_USE_LEGACY_KERAS"] = "1"
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
 import streamlit as st
 import streamlit.components.v1 as components
 from pymongo import MongoClient
@@ -24,7 +19,7 @@ import secrets
 import json
 import io
 import requests
-import urllib.request
+import os
 import gdown
 
 # ML Libraries for Data Protection Model
@@ -56,30 +51,10 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 # ==========================================
 # 100% AUTOMATED HYBRID AI ENGINE
 # ==========================================
-
-# THE FOOLPROOF FIX: Custom layer to intercept and handle the TrueDivide 127.5 crash
-class SafeTrueDivide(tf.keras.layers.Layer):
-    def __init__(self, *args, **kwargs):
-        # Ignore arbitrary kwargs that Keras 3 throws
-        super(SafeTrueDivide, self).__init__()
-
-    def call(self, inputs, *args, **kwargs):
-        # Safely intercept the positional argument (127.5 or 255.0)
-        divisor = 255.0
-        if len(args) > 0:
-            divisor = args[0]
-        elif 'y' in kwargs:
-            divisor = kwargs['y']
-        return inputs / divisor
-
-    @classmethod
-    def from_config(cls, config):
-        return cls()
-
 @st.cache_resource(show_spinner=False)
-def initialize_vault_ai_engine_v5():
-    # Bumping function name and filename to break Streamlit's old cache
-    model_path = 'final_verified_model_v5.h5'
+def load_safety_engine_clean():
+    # Since we reverted to TF 2.15, standard Keras loading works flawlessly
+    model_path = 'final_model_v6.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
@@ -91,16 +66,12 @@ def initialize_vault_ai_engine_v5():
             return None, f"Drive Download Failed: {str(e)}"
 
     try:
-        custom_objs = {
-            "TrueDivide": SafeTrueDivide,
-            "TFOpLambda": tf.keras.layers.Lambda
-        }
-        model = tf.keras.models.load_model(model_path, compile=False, custom_objects=custom_objs)
+        model = tf.keras.models.load_model(model_path, compile=False)
         return model, "ONLINE"
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model, model_status = initialize_vault_ai_engine_v5()
+safety_model, model_status = load_safety_engine_clean()
 
 def calculate_skin_ratio(pil_img):
     """Fallback mathematical skin detection"""
@@ -144,7 +115,7 @@ def is_safe_content(file_bytes, model):
         
         # Determine exact NSFW trigger based on AI classes
         if len(pred) == 5:
-            # Typical 5-class: 0=drawings, 1=hentai, 2=neutral, 3=porn, 4=sexy
+            # 0: drawings, 1: hentai, 2: neutral, 3: porn, 4: sexy
             nsfw_score = pred[1] + pred[3] + pred[4]
             is_nsfw_ai = nsfw_score >= 0.60
         elif len(pred) == 2:
