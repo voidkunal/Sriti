@@ -4,7 +4,8 @@ cloudinary
 certifi
 plotly
 requests
-tensorflow==2.15.0
+tensorflow
+h5py
 Pillow>=9.0.0
 numpy>=1.24.0
 gdown
