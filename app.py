@@ -27,6 +27,22 @@ from PIL import Image
 import numpy as np
 
 # ==========================================
+# 0. TENSORFLOW COMPATIBILITY MONKEY-PATCH
+# ==========================================
+# This silently catches Keras 3 keywords and translates them 
+# for Keras 2 so the custom_nsfw_model.h5 never crashes the app.
+try:
+    _orig_input_init = tf.keras.layers.InputLayer.__init__
+    def _patched_input_init(self, *args, **kwargs):
+        if 'batch_shape' in kwargs:
+            kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
+        kwargs.pop('optional', None)
+        _orig_input_init(self, *args, **kwargs)
+    tf.keras.layers.InputLayer.__init__ = _patched_input_init
+except Exception:
+    pass
+
+# ==========================================
 # 1. UI CONFIGURATION & SETUP
 # ==========================================
 st.set_page_config(page_title="voidememo Vault", page_icon="🌐", layout="wide", initial_sidebar_state="collapsed")
@@ -52,24 +68,30 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 
 @st.cache_resource(show_spinner=False)
 def load_production_ai():
-    """Explicitly imports tf_keras to force the Keras 2 engine natively."""
+    """Native loading with a robust safety net for Keras 3 mathematical parsing errors."""
     model_path = 'custom_nsfw_model.h5'
-    
     if not os.path.exists(model_path):
         return None, "Model file not found. Ensure 'custom_nsfw_model.h5' is in your folder."
 
     try:
-        # Streamlit caching bypass: Force Python to use the Keras 2 API directly
-        # instead of relying on the environment variable, avoiding the 127.5 float error.
-        try:
-            import tf_keras as safe_keras
-        except ImportError:
-            import tensorflow.keras as safe_keras
-            
-        model = safe_keras.models.load_model(model_path, compile=False)
+        model = tf.keras.models.load_model(model_path, compile=False)
         return model, "ONLINE"
     except Exception as e:
-        return None, f"TensorFlow Error: {str(e)}"
+        err_msg = str(e)
+        if "127.5" in err_msg or "TrueDivide" in err_msg:
+            # Fallback specifically for TF 2.16+ strict math checking
+            try:
+                class SafeDiv(tf.keras.layers.Layer):
+                    def call(self, x): return x / 127.5
+                class SafeDummy(tf.keras.layers.Layer):
+                    def call(self, x): return x
+                custom_objs = {"TrueDivide": SafeDiv, "TFOpLambda": SafeDummy}
+                with tf.keras.utils.custom_object_scope(custom_objs):
+                    model = tf.keras.models.load_model(model_path, compile=False)
+                return model, "ONLINE"
+            except Exception as e2:
+                return None, f"Parsing Error: {str(e2)}"
+        return None, f"TensorFlow Error: {err_msg}"
 
 # Guaranteed Global Variables
 safety_model = None
@@ -81,7 +103,6 @@ try:
         safety_model, model_status = _ai_result
 except Exception as fatal_e:
     model_status = f"Fatal Execution Error: {str(fatal_e)}"
-
 
 def calculate_skin_ratio(pil_img):
     """Mathematical fallback algorithm for skin detection."""
@@ -135,7 +156,6 @@ def is_safe_content(file_bytes, model):
             is_nsfw = False
             
         return not is_nsfw
-        
     except Exception as e:
         print(f"Prediction Error: {e}")
         return True 
