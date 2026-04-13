@@ -52,14 +52,41 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 
 @st.cache_resource(show_spinner=False)
 def load_production_ai():
-    """Simple, direct loading of your custom model."""
+    """Direct loading of your custom model with Custom Object Scope bypass for TrueDivide."""
     model_path = 'custom_nsfw_model.h5'
     
     if not os.path.exists(model_path):
         return None, "Model file not found. Ensure 'custom_nsfw_model.h5' is in your folder."
 
     try:
-        model = tf.keras.models.load_model(model_path, compile=False)
+        # Define safe fallback layers to catch the specific 'TrueDivide' and kwargs bugs
+        class SafeDivLayer(tf.keras.layers.Layer):
+            def __init__(self, **kwargs):
+                # Filter out unrecognized kwargs that crash the parser
+                clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
+                super().__init__(**clean_kwargs)
+            def call(self, inputs, *args, **kwargs): 
+                return inputs / 255.0
+                
+        class SafeDummyLayer(tf.keras.layers.Layer):
+            def __init__(self, **kwargs):
+                clean_kwargs = {k: v for k, v in kwargs.items() if k in ['name', 'trainable', 'dtype']}
+                super().__init__(**clean_kwargs)
+            def call(self, inputs, *args, **kwargs): 
+                return inputs
+
+        custom_objs = {
+            "TrueDivide": SafeDivLayer,
+            "TFOpLambda": SafeDummyLayer,
+            "RandomFlip": SafeDummyLayer,
+            "RandomRotation": SafeDummyLayer,
+            "RandomZoom": SafeDummyLayer,
+            "RandomContrast": SafeDummyLayer
+        }
+
+        with tf.keras.utils.custom_object_scope(custom_objs):
+            model = tf.keras.models.load_model(model_path, compile=False)
+            
         return model, "ONLINE"
     except Exception as e:
         return None, f"TensorFlow Error: {str(e)}"
