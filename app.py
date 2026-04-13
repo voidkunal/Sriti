@@ -1,6 +1,7 @@
 import os
-# MUST BE SET BEFORE TENSORFLOW IS IMPORTED TO FIX THE "127.5" CRASH
-os.environ["TF_USE_LEGACY_KERAS"] = "1" 
+# CRITICAL: Must be at the very top to force TensorFlow into Legacy mode
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -55,10 +56,30 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 # ==========================================
 # 100% AUTOMATED HYBRID AI ENGINE
 # ==========================================
+
+# THE FOOLPROOF FIX: Custom layer to intercept and handle the TrueDivide 127.5 crash
+class SafeTrueDivide(tf.keras.layers.Layer):
+    def __init__(self, *args, **kwargs):
+        # Ignore arbitrary kwargs that Keras 3 throws
+        super(SafeTrueDivide, self).__init__()
+
+    def call(self, inputs, *args, **kwargs):
+        # Safely intercept the positional argument (127.5 or 255.0)
+        divisor = 255.0
+        if len(args) > 0:
+            divisor = args[0]
+        elif 'y' in kwargs:
+            divisor = kwargs['y']
+        return inputs / divisor
+
+    @classmethod
+    def from_config(cls, config):
+        return cls()
+
 @st.cache_resource(show_spinner=False)
-def initialize_ai_vault_engine_final():
-    # Because TF is forced into Legacy Keras mode, it will cleanly load everything
-    model_path = 'final_verified_model.h5'
+def initialize_vault_ai_engine_v5():
+    # Bumping function name and filename to break Streamlit's old cache
+    model_path = 'final_verified_model_v5.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
@@ -70,13 +91,16 @@ def initialize_ai_vault_engine_final():
             return None, f"Drive Download Failed: {str(e)}"
 
     try:
-        # Legacy Keras perfectly understands TrueDivide and 127.5 floats
-        model = tf.keras.models.load_model(model_path, compile=False)
+        custom_objs = {
+            "TrueDivide": SafeTrueDivide,
+            "TFOpLambda": tf.keras.layers.Lambda
+        }
+        model = tf.keras.models.load_model(model_path, compile=False, custom_objects=custom_objs)
         return model, "ONLINE"
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model, model_status = initialize_ai_vault_engine_final()
+safety_model, model_status = initialize_vault_ai_engine_v5()
 
 def calculate_skin_ratio(pil_img):
     """Fallback mathematical skin detection"""
