@@ -53,15 +53,16 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 # 100% AUTOMATED HYBRID AI ENGINE
 # ==========================================
 @st.cache_resource(show_spinner=False)
-def load_nsfw_model():
-    # We use a new filename to bypass any corrupted github files lingering in the cache
+def get_safety_engine():
+    # Changed function name to completely bypass Streamlit's old broken cache
     model_path = 'verified_nsfw_model.h5'
     gdrive_file_id = "1Vjy4jeAo4D95YLijaDrM7qjk77mSZ3Zd"
     
     if not os.path.exists(model_path) or os.path.getsize(model_path) < 1000000:
         print("Downloading AI model directly from User's Google Drive link...")
         try:
-            gdown.download(id=gdrive_file_id, output=model_path, quiet=False)
+            download_url = f"https://drive.google.com/uc?id={gdrive_file_id}"
+            gdown.download(url=download_url, output=model_path, quiet=False)
         except Exception as e:
             return None, f"Drive Download Failed: {str(e)}"
 
@@ -71,7 +72,7 @@ def load_nsfw_model():
     except Exception as e:
         return None, f"TensorFlow Engine Crash: {str(e)}"
 
-safety_model, model_status = load_nsfw_model()
+safety_model, model_status = get_safety_engine()
 
 def calculate_skin_ratio(pil_img):
     """Fallback mathematical skin detection"""
