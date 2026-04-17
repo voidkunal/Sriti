@@ -47,16 +47,16 @@ EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" hei
 EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
 
 # ==========================================
-# 2. BULLETPROOF HYBRID AI ENGINE
+# 2. PURE DEEP LEARNING AI ENGINE
 # ==========================================
 
 @st.cache_resource(show_spinner=False)
 def load_production_ai():
-    """Native loading with a robust safety net ensuring the manager is always ONLINE."""
-    model_path = 'new_custom_nsfw_model.keras'
+    """Native loading for the modern Keras 3 model."""
+    model_path = 'custom_nsfw_model.keras'
     
     if not os.path.exists(model_path):
-        return None, "ONLINE (Math Heuristic Mode - Model file missing)"
+        return None, "OFFLINE (Model file missing)"
 
     # Check if Git LFS failed and only downloaded a pointer text file
     try:
@@ -64,7 +64,7 @@ def load_production_ai():
             with open(model_path, 'r', encoding='utf-8') as f:
                 content = f.read(50)
                 if "version https://git-lfs" in content:
-                    return None, "ONLINE (Math Heuristic Mode - LFS ERROR: Streamlit downloaded the text pointer, not the binary file)"
+                    return None, "OFFLINE (LFS ERROR: Streamlit downloaded the text pointer, not the binary file)"
     except Exception:
         pass
 
@@ -73,7 +73,7 @@ def load_production_ai():
         return model, "ONLINE (Deep Learning AI)"
     except Exception as e:
         err_msg = str(e)
-        return None, f"ONLINE (Math Heuristic Mode - Error: {err_msg})"
+        return None, f"OFFLINE (Error: {err_msg})"
 
 # Guaranteed Global Variables
 safety_model = None
@@ -84,37 +84,18 @@ try:
     if _ai_result and len(_ai_result) == 2:
         safety_model, model_status = _ai_result
 except Exception as fatal_e:
-    model_status = f"ONLINE (Math Heuristic Mode - Fatal Execution Error: {str(fatal_e)})"
-
-def calculate_skin_ratio(pil_img):
-    """Mathematical fallback algorithm for skin detection acting as the Manager when AI fails."""
-    try:
-        img = pil_img.resize((150, 150), Image.Resampling.NEAREST)
-        arr = np.array(img, dtype=np.int32)
-        R, G, B = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
-        
-        max_rgb = np.maximum(R, np.maximum(G, B))
-        min_rgb = np.minimum(R, np.minimum(G, B))
-        
-        rule1 = (R > 95) & (G > 40) & (B > 20)
-        rule2 = (max_rgb - min_rgb) > 15
-        rule3 = np.abs(R - G) > 15
-        rule4 = (R > G) & (R > B)
-        
-        skin_mask = rule1 & rule2 & rule3 & rule4
-        return np.mean(skin_mask)
-    except:
-        return 0.0
+    model_status = f"OFFLINE (Fatal Execution Error: {str(fatal_e)})"
 
 def is_safe_content(file_bytes, model):
-    """Evaluates media bytes. Returns: True if SAFE, False if NSFW."""
+    """Evaluates media strictly using the Deep Learning AI."""
+    if model is None:
+        # If the AI is offline, default to blocking or allowing. 
+        # Since this is a security feature, we allow it through but log the AI is down.
+        print("Warning: AI model is offline.")
+        return True 
+
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
-        skin_ratio = calculate_skin_ratio(pil_img)
-        
-        if model is None:
-            if skin_ratio > 0.55: return False 
-            return True 
             
         target_size = (224, 224) 
         if model.input_shape and len(model.input_shape) >= 3 and model.input_shape[1] is not None:
@@ -123,19 +104,12 @@ def is_safe_content(file_bytes, model):
         img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
         raw_array = np.expand_dims(img_array, axis=0) 
         
+        # Predict using the pure neural network
         pred = model.predict(raw_array, verbose=0)[0]
-        is_nsfw = False
         
-        if len(pred) == 5:
-            nsfw_score = pred[1] + pred[3] + pred[4]
-            is_nsfw = nsfw_score >= 0.60
-        elif len(pred) == 2:
-            is_nsfw = pred[1] > 0.60
-        elif len(pred) == 1:
-            is_nsfw = pred[0] > 0.60
-            
-        if is_nsfw and skin_ratio < 0.02 and len(pred) != 5:
-            is_nsfw = False
+        # New model outputs a single sigmoid probability (0=Safe, 1=NSFW)
+        # Threshold set to 60% confidence
+        is_nsfw = pred[0] >= 0.60
             
         return not is_nsfw
     except Exception as e:
@@ -155,7 +129,6 @@ except Exception as e:
 
 db = client["memory_vault"]
 users_col = db["users"]
-files_col = db["folders"]
 folders_col = db["folders"]
 shares_col = db["shares"]             
 notifications_col = db["notifications"] 
