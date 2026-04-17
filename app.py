@@ -1,6 +1,5 @@
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["TF_USE_LEGACY_KERAS"] = "1" # CRITICAL FIX: Forces TF 2.16+ to use Keras 2 to prevent .h5 parsing crashes
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -24,10 +23,6 @@ import io
 import requests
 
 import tensorflow as tf
-try:
-    import tf_keras as keras
-except ImportError:
-    keras = tf.keras
 from PIL import Image
 import numpy as np
 
@@ -58,7 +53,8 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 @st.cache_resource(show_spinner=False)
 def load_production_ai():
     """Native loading with a robust safety net ensuring the manager is always ONLINE."""
-    model_path = 'custom_nsfw_model.h5'
+    model_path = 'custom_nsfw_model.keras'
+    
     if not os.path.exists(model_path):
         return None, "ONLINE (Math Heuristic Mode - Model file missing)"
 
@@ -68,37 +64,12 @@ def load_production_ai():
             with open(model_path, 'r', encoding='utf-8') as f:
                 content = f.read(50)
                 if "version https://git-lfs" in content:
-                    return None, "ONLINE (Math Heuristic Mode - LFS ERROR: Streamlit downloaded the text pointer, not the binary .h5 file)"
+                    return None, "ONLINE (Math Heuristic Mode - LFS ERROR: Streamlit downloaded the text pointer, not the binary file)"
     except Exception:
         pass
 
-    # The AI Patch: Intercept and fix Keras 3 'batch_shape' and 'optional' compatibility errors
-    class SafeInputLayer(keras.layers.InputLayer):
-        def __init__(self, **kwargs):
-            if 'batch_shape' in kwargs:
-                # Translate Keras 2 terminology to Keras 3
-                kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
-            if 'optional' in kwargs:
-                # Keras 3 completely removed 'optional', so we strip it out
-                kwargs.pop('optional')
-            super().__init__(**kwargs)
-
-    class SafeDiv(keras.layers.Layer):
-        def call(self, x): return x / 127.5
-        
-    class SafeDummy(keras.layers.Layer):
-        def call(self, x): return x
-
-    # Inject the patched layers into the loading process
-    custom_objs = {
-        "InputLayer": SafeInputLayer,
-        "TrueDivide": SafeDiv, 
-        "TFOpLambda": SafeDummy
-    }
-
     try:
-        with keras.utils.custom_object_scope(custom_objs):
-            model = keras.models.load_model(model_path, compile=False)
+        model = tf.keras.models.load_model(model_path, compile=False)
         return model, "ONLINE (Deep Learning AI)"
     except Exception as e:
         err_msg = str(e)
@@ -184,10 +155,11 @@ except Exception as e:
 
 db = client["memory_vault"]
 users_col = db["users"]
-files_col = db["files"]
+files_col = db["folders"]
 folders_col = db["folders"]
 shares_col = db["shares"]             
 notifications_col = db["notifications"] 
+files_col = db["files"]
 
 try:
     cloudinary.config(
