@@ -52,28 +52,28 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 
 @st.cache_resource(show_spinner=False)
 def load_production_ai():
-    """Native loading for the modern Keras 3 model."""
-    model_path = 'custom_nsfw_model.keras'
+    """Native loading for the modern Keras 3 model. 100% AI strictly enforced."""
+    # Matches your newly uploaded filename exactly
+    model_path = 'new_custom_nsfw_model.keras'
     
     if not os.path.exists(model_path):
-        return None, "OFFLINE (Model file missing)"
+        return None, f"OFFLINE (File '{model_path}' is missing from the repository)"
 
-    # Check if Git LFS failed and only downloaded a pointer text file
     try:
         if os.path.getsize(model_path) < 2000: 
             with open(model_path, 'r', encoding='utf-8') as f:
                 content = f.read(50)
                 if "version https://git-lfs" in content:
-                    return None, "OFFLINE (LFS ERROR: Streamlit downloaded the text pointer, not the binary file)"
+                    return None, "OFFLINE (Git LFS Error: Streamlit downloaded the text pointer, not the binary file)"
     except Exception:
         pass
 
     try:
         model = tf.keras.models.load_model(model_path, compile=False)
-        return model, "ONLINE (Deep Learning AI)"
+        return model, "ONLINE (Pure Deep Learning AI)"
     except Exception as e:
         err_msg = str(e)
-        return None, f"OFFLINE (Error: {err_msg})"
+        return None, f"OFFLINE (AI Load Error: {err_msg})"
 
 # Guaranteed Global Variables
 safety_model = None
@@ -87,12 +87,11 @@ except Exception as fatal_e:
     model_status = f"OFFLINE (Fatal Execution Error: {str(fatal_e)})"
 
 def is_safe_content(file_bytes, model):
-    """Evaluates media strictly using the Deep Learning AI."""
+    """Evaluates media strictly using the Deep Learning AI. No math fallback."""
     if model is None:
-        # If the AI is offline, default to blocking or allowing. 
-        # Since this is a security feature, we allow it through but log the AI is down.
-        print("Warning: AI model is offline.")
-        return True 
+        # STRICT SECURITY RULE: If AI is offline, instantly fail and block the upload.
+        print("Warning: AI model is offline. Blocking upload.")
+        return False 
 
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
@@ -114,7 +113,7 @@ def is_safe_content(file_bytes, model):
         return not is_nsfw
     except Exception as e:
         print(f"Prediction Error: {e}")
-        return True 
+        return False # Fail closed on error to protect the vault
 
 # ==========================================
 # 3. DATABASE & CLOUD CONFIGURATION
@@ -1480,9 +1479,9 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     st.write("<br>", unsafe_allow_html=True) 
 
     if safety_model is not None:
-        st.success(f"✅ Manager Engine is {model_status}. (Note: If your safe photos are currently blurred from a past error, go to Profile Hub and click 'Force Deep Scan' to fix them).")
+        st.success(f"✅ Manager Engine is {model_status}.")
     else:
-        st.warning(f"⚠️ Manager Engine is {model_status}. Continuing to protect your vault safely.")
+        st.error(f"🚨 Manager Engine is {model_status}. Uploads are strictly blocked until the AI is restored.")
     
     if is_root and st.session_state.story_groups:
         st.markdown(f'<h3 style="margin-left: 40px; margin-bottom: 10px;">Stories</h3>', unsafe_allow_html=True)
