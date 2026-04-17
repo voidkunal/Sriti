@@ -72,12 +72,15 @@ def load_production_ai():
     except Exception:
         pass
 
-    # The AI Patch: Intercept and fix Keras 3 'batch_shape' compatibility errors
+    # The AI Patch: Intercept and fix Keras 3 'batch_shape' and 'optional' compatibility errors
     class SafeInputLayer(keras.layers.InputLayer):
         def __init__(self, **kwargs):
             if 'batch_shape' in kwargs:
                 # Translate Keras 2 terminology to Keras 3
                 kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
+            if 'optional' in kwargs:
+                # Keras 3 completely removed 'optional', so we strip it out
+                kwargs.pop('optional')
             super().__init__(**kwargs)
 
     class SafeDiv(keras.layers.Layer):
