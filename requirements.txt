@@ -4,8 +4,8 @@ cloudinary
 certifi
 plotly
 requests
-tensorflow>=2.16.1
-tf-keras>=2.16.0
+tensorflow==2.15.0
+tf-keras>=2.15.0
 h5py
 Pillow>=9.0.0
 numpy<2.0.0
