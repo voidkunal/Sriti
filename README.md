@@ -1,79 +1,94 @@
-# Sriti
-A Web application where you store your memories !
+#  voidememo Vault
 
-📁 Memory Vault: Private Cloud Storage Dashboard
-Memory Vault is a secure, high-performance web application designed for private media storage. It features a modern Liquid Glass (Glassmorphism) UI, real-time statistics, and a persistent session management system. Users can create directories, upload images or videos, and interact with their content through a gamified reaction system.
+**The Private Digital Bibliotheca.** Access, organize, and protect your media with absolute privacy.
 
-🚀 The Approach
-The project was built with a focus on Minimalist Sophistication. The goal was to combine the power of a backend-heavy application with a frontend that feels light, modern, and intuitive.
+![voidememo UI](Unknown.png)
+![voidememo Features](Unknown-2.png)
 
-1. UI/UX Design Strategy
+voidememo is an advanced, privacy-first media vault built with Python and Streamlit. It combines bank-grade security protocols with a local Deep Learning AI engine to manage, protect, and optimize your personal digital memories.
 
-Liquid Glass Theme: Using high-level CSS injection, the app utilizes backdrop-filter: blur() and semi-transparent RGBA backgrounds to create a frosted glass effect that adapts to the moving gradients of the background.
+##  Core Features
 
-Dashboard Layout: Inspired by admin panels, the UI is split into a persistent sidebar navigation and a main content area that provides high-level metrics (Total Files, Folders, and Storage Breakdown).
+ **Bank-Grade Security & Authentication:** Multi-factor authentication featuring Email OTPs, secure SHA-256 password hashing (with pepper), and PIN-protected albums with secure email recovery flows.
+ **Local AI Content Moderation:** Integrates a native TensorFlow/Keras deep learning model (`Manager Engine`) that scans uploads locally and automatically blurs sensitive/NSFW content without relying on third-party APIs.
+ **Lightning-Fast Media Delivery:** Utilizes dynamic Cloudinary transformations to serve highly compressed thumbnails in grid views, loading full-resolution files only when entering the full-screen Lightbox.
+ **Deterministic Story Engine:** Automatically curates your media into dynamic, cache-optimized stories like *Recent Highlights*, *Memory Lane*, and *Favorites*.
+ **Social & Sharing Ecosystem:** Share media batches securely with "Nearby Users" (matched by location PIN) or globally. Includes real-time in-app notifications, media preview overlays, and emoji reactions.
+ **Developer API:** Generate secure, read-only REST API endpoints to directly embed your private albums into external portfolios, React/Next.js apps, or websites.
+ **Smart Duplicate Removal:** One-click MD5 hashing utility to scan albums, find exact duplicate files, and automatically clean them up to save cloud storage.
 
-Responsive Modals: Destructive actions (Deletion/Renaming) are handled via centered popup dialogs to ensure user intent and prevent accidental data loss.
+## Technology Stack
 
-2. Technical Infrastructure
+* **Frontend & Framework:** [Streamlit](https://streamlit.io/) (Highly customized with raw HTML/CSS/JS injection for a native-app feel).
+* **Database:** [MongoDB Atlas](https://www.mongodb.com/) (NoSQL document storage for users, folders, files, and notifications).
+* **Media Storage:** [Cloudinary](https://cloudinary.com/) (Secure cloud blob storage and dynamic image transformation).
+* **Artificial Intelligence:** [TensorFlow / Keras](https://www.tensorflow.org/) (Computer Vision).
+* **Authentication:** Native SMTP integration (Google App Passwords) and cryptographic hashing.
 
-Frontend: Built with Streamlit, customized heavily with HTML/CSS injection to bypass standard component limitations.
+##  Installation & Setup
 
-Database: MongoDB Atlas serves as the primary metadata store, tracking user credentials, folder hierarchies, and file details.
+### 1. Clone the Repository
+```bash
+git clone [https://github.com/yourusername/voidememo-vault.git](https://github.com/yourusername/voidememo-vault.git)
+cd voidememo-vault
+2. Install Dependencies
 
-Cloud Storage: Integrated with Cloudinary API for secure, optimized hosting of images and videos.
+Ensure you have Python 3.9+ installed.
 
-Security: Passwords are never stored in plain text; they are secured using SHA-256 Hashing.
+Bash
+pip install -r requirements.txt
+(Dependencies include: streamlit, pymongo, cloudinary, certifi, tensorflow, Pillow, numpy)
 
-✨ Key Features
-🔐 Persistent Authentication
+3. Environment Variables (Secrets)
 
-Refresh Persistence: Uses UUID-based session tokens stored in the URL query parameters and MongoDB. This ensures that clicking "Refresh" in the browser does not log the user out.
+Create a .streamlit folder in the root directory and add a secrets.toml file. Fill in your API keys:
 
-Secure Sign-up/Login: email and username-based authentication.
+Ini, TOML
+# .streamlit/secrets.toml
 
-📂 Advanced File Management
+# MongoDB Connection String
+MONGO_URI = "mongodb+srv://<username>:<password>@cluster.mongodb.net/?retryWrites=true&w=majority"
 
-Root Control: The main dashboard is for folder creation and high-level stats.
+# Cloudinary Credentials
+CLOUDINARY_CLOUD_NAME = "your_cloud_name"
+CLOUDINARY_API_KEY = "your_api_key"
+CLOUDINARY_API_SECRET = "your_api_secret"
 
-Directory Logic: Uploading is enabled only once inside a specific folder to keep the root directory organized.
+# Email SMTP for OTP & Notifications (Use a 16-letter Google App Password)
+SMTP_EMAIL = "your-email@gmail.com"
+SMTP_PASSWORD = "your_16_letter_app_password"
 
-Safe Deletion: A recursive deletion algorithm ensures that when a folder is deleted, all sub-folders and their corresponding files are wiped from both MongoDB and Cloudinary storage.
+# Security Pepper for Password Hashing
+APP_PEPPER = "a_super_secret_random_string"
+4. Install the AI Model
 
-📊 Real-time Insights
+The application requires the deep learning model to run. Ensure you place your Keras model file (new_custom_nsfw_model.keras) directly in the root directory.
 
-Live Clock: A Javascript-injected header clock providing real-time local time.
+Note: If you are using Git LFS for this file, ensure it is properly pulled and not just a text pointer.
 
-Storage Breakdown: A Plotly-powered dynamic pie chart that analyzes the user's storage usage (Photos vs. Other Files).
+5. Run the Application
 
-🎮 Gamified Interaction
+Bash
+streamlit run app.py
+Project Structure
+Plaintext
+voidememo-vault/
+│
+├── app.py                         # Main application logic & UI
+├── new_custom_nsfw_model.keras    # TensorFlow AI Moderation Model
+├── requirements.txt               # Python dependencies
+├── .streamlit/
+│   └── secrets.toml               # Environment variables (Do not commit!)
+└── README.md                      # Documentation
+Privacy Policy & Data Architecture
+voidememo is built on a zero-trust philosophy for external viewers.
 
-Emoji Reactions: Users can react to their files with custom emojis.
+Passwords & PINs: Never stored in plaintext. Hashed using SHA-256 with a secure pepper.
 
-24-Hour Cooldown: Once a reaction is set, it is locked for 24 hours to encourage thoughtful interaction. A countdown timer shows exactly when the lock will expire.
+AI Processing: The AI model processes file byte streams in memory.
 
+Media Deletion: Deleting an album or file triggers a hard deletion from both the MongoDB database and the Cloudinary storage bucket simultaneously.
 
-
-voidememo is a high-performance, secure cloud storage vault designed with the aesthetics of an admin dashboard and the engagement loop of modern social platforms. It prioritizes data privacy, multi-profile account isolation, and fluid user interaction without relying on traditional social feeds.
-
-Built entirely in Python via Streamlit, utilizing MongoDB for metadata and Cloudinary for enterprise-grade asset caching.
-
-## ✨ Core Features
-
-* 🔐 **Biometric-Grade OTP Authentication:** Passwords are mathematically hashed (SHA-256 + Pepper), and session ingress is guarded by Time-Based One-Time Passwords (OTPs) dispatched via SMTP.
-* 👥 **Multi-Profile Isolation:** A single verified email address can host up to 5 distinct, completely isolated memory vaults (e.g., Personal, Work, Family). Profile generation enforces phone-number validation anti-spam logic.
-* 📱 **Immersive Full-Screen Lightbox:** The frontend boasts a completely fluid, `target="_self"` DOM-manipulated image and video viewer. Videos loop silently within circular masonry grids and seamlessly expand to full 1080p playback upon interaction.
-* 📖 **Deterministic Stories:** The engine generates dynamic timeline stories. It automatically calculates interaction vectors, isolating media reacted to within the last week into a `"Previous week's favs ⭐"` ring.
-* 🔗 **Decentralized Sharing Engine:** Users can transmit entire batches of encrypted media metadata to proximate users using local PIN codes, or query users globally. 
-* 🤖 **Vault AI Assistant:** A localized data-parsing AI engine that queries your NoSQL document arrays to retrieve specific metrics about your vault in real-time.
-
-## 🛠️ Technical Architecture
-
-| Component | Technology |
-| :--- | :--- |
-| **Language** | Python 3.12+ |
-| **Frontend Framework** | Streamlit (w/ Deep CSS/JS Component Injection) |
-| **Database Architecture** | MongoDB Atlas (PyMongo - BSON Object Serialization) |
-| **Media Delivery Network** | Cloudinary API (Multipart chunking for >50MB files) |
-| **Security Protocol** | Certifi TLS 1.3, SHA-256 Hashing |
-
+License
+© 2026 voidememo. All rights reserved.
+(Update with your specific open-source license if you intend to make this public, e.g., MIT, GPL-3.0)
