@@ -53,7 +53,7 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 @st.cache_resource(show_spinner=False)
 def load_production_ai():
     """Native loading with a robust safety net ensuring the manager is always ONLINE."""
-    model_path = 'custom_nsfw_model.keras'
+    model_path = 'new_custom_nsfw_model.keras'
     
     if not os.path.exists(model_path):
         return None, "ONLINE (Math Heuristic Mode - Model file missing)"
