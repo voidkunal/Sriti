@@ -21,7 +21,7 @@ import html
 import secrets 
 import io
 import requests
-import re # Feature 5: Added for Backend Regex Validation
+import re 
 
 import tensorflow as tf
 from PIL import Image
@@ -46,6 +46,19 @@ st.markdown("""
 
 EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
 EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
+
+# GLOBAL WALLPAPER GENERATOR
+wallpaper_html = '''
+<div id="vault-wallpaper" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; pointer-events: none;">
+    <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
+'''
+for i in range(60):
+    wallpaper_html += f'<img src="https://picsum.photos/seed/{i+9000}/400/600" style="width: 12vw; height: 18vw; object-fit: cover; border-radius: 12px; opacity: 0.25;" loading="lazy">'
+wallpaper_html += '''
+    </div>
+</div>
+<style>@keyframes scroll-wallpaper { 0% { transform: rotate(-15deg) translateY(0); } 100% { transform: rotate(-15deg) translateY(-50%); } }</style>
+'''
 
 # ==========================================
 # 2. PURE DEEP LEARNING AI ENGINE
@@ -75,7 +88,6 @@ def load_production_ai():
         err_msg = str(e)
         return None, f"OFFLINE (AI Load Error: {err_msg})"
 
-# Guaranteed Global Variables
 safety_model = None
 model_status = "Initializing..."
 
@@ -87,7 +99,7 @@ except Exception as fatal_e:
     model_status = f"OFFLINE (Fatal Execution Error: {str(fatal_e)})"
 
 def is_safe_content(file_bytes, model):
-    """Evaluates media strictly using the Deep Learning AI. No math fallback."""
+    """Evaluates media strictly using the Deep Learning AI."""
     if model is None:
         print("Warning: AI model is offline.")
         return False 
@@ -103,9 +115,7 @@ def is_safe_content(file_bytes, model):
         raw_array = np.expand_dims(img_array, axis=0) 
         
         pred = model.predict(raw_array, verbose=0)[0]
-        
         is_nsfw = pred[0] >= 0.60
-            
         return not is_nsfw
     except Exception as e:
         print(f"Prediction Error: {e}")
@@ -129,7 +139,7 @@ shares_col = db["shares"]
 notifications_col = db["notifications"] 
 files_col = db["files"]
 
-# Feature 4: API & Database Query Optimisation (Indexing)
+# API Optimization: Indexes
 try:
     users_col.create_index("email")
     users_col.create_index("session_token")
@@ -230,15 +240,13 @@ if api_req_key:
         else:
             st.markdown('<p style="color: white; text-align: center;">Gallery is empty.</p>', unsafe_allow_html=True)
     else:
-        st.error("Access Denied. Invalid or disabled API Key.")
+        st.toast("Access Denied. Invalid or disabled API Key.", icon="🚨")
         
     st.stop()
 
 # ==========================================
 # 5. UTILITIES, VALIDATION & MIDDLEWARE
 # ==========================================
-
-# Feature 3: Debouncing & Throttling (Rate Limiting)
 def check_rate_limit(action, cooldown_seconds=3):
     if 'rate_limits' not in st.session_state:
         st.session_state.rate_limits = {}
@@ -250,7 +258,6 @@ def check_rate_limit(action, cooldown_seconds=3):
     st.session_state.rate_limits[action] = now
     return True
 
-# Feature 5: Proper Backend Validation
 def validate_email(email):
     return re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", email)
 
@@ -269,8 +276,11 @@ def time_ago(ts):
 
 def register(email, password, first_name, last_name, birthday, pin_code, phone_number):
     email = str(email).strip().lower()
-    existing_count = users_col.count_documents({"email": email})
     
+    if not validate_email(email): return "INVALID_EMAIL"
+    if len(password) < 6: return "WEAK_PASSWORD"
+
+    existing_count = users_col.count_documents({"email": email})
     if existing_count >= 5: return "MAX_ACCOUNTS"
     if existing_count > 0 and not str(phone_number).strip(): return "PHONE_REQUIRED"
 
@@ -364,9 +374,8 @@ active_folder = st.query_params.get("folder", "root")
 defaults = {
     "logged_in": False, "username": "", "reset_step": 0, "reset_email": "",
     "uploader_key": 0, "folder_key": 0, "story_groups": [], "pending_share": None,
-    "pending_delete": None, "pending_locked_react": None, "pending_move": None,
-    "login_step": 0, "login_email": "",
-    "unlocked_albums": set() # Feature 7: Track authenticated folders
+    "pending_delete": None, "pending_move": None, "pending_toast": None,
+    "login_step": 0, "login_email": "", "unlocked_albums": []
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -395,8 +404,11 @@ if st.session_state.logged_in:
                 elif action == "move":
                     st.session_state.pending_move = str(fid)
                 elif action == "locked_react":
-                    time_elapsed = time.time() - file.get("tag_time", 0)
-                    st.session_state.pending_locked_react = max(0, 86400 - time_elapsed)
+                    # UI Clean Update: Sets a toast notification instead of a dialog
+                    rem = max(0, 86400 - (time.time() - file.get("tag_time", 0)))
+                    h, rem_s = divmod(int(rem), 3600)
+                    m, _ = divmod(rem_s, 60)
+                    st.session_state.pending_toast = f"Emoji changes locked. Time remaining: {h}h {m}m."
                 elif action == "pin":
                     if file.get("pin_order", 0) > 0:
                         files_col.update_one({"_id": fid}, {"$unset": {"pin_order": ""}})
@@ -443,7 +455,6 @@ if st.session_state.logged_in:
 # ==========================================
 # 8. DETERMINISTIC STORY ENGINE
 # ==========================================
-# Feature 4: API & Function Optimization (Caching to prevent recalculation)
 @st.cache_data(ttl=300)
 def generate_cached_stories(username, time_window):
     random.seed(f"{username}_{time_window}") 
@@ -488,7 +499,6 @@ if st.session_state.logged_in:
 # ==========================================
 # 9. DIALOGS & OVERLAYS
 # ==========================================
-# Feature 7: PIN-Protected Albums Logic
 @st.dialog("🔒 Set Album PIN")
 def set_album_pin_dialog(folder_id):
     st.write("Set a secure PIN. Anyone accessing this album will need to enter it.")
@@ -515,6 +525,45 @@ def remove_album_pin_dialog(folder_id, correct_hash):
             st.rerun()
         else:
             st.toast("Incorrect PIN.", icon="🚨")
+
+@st.dialog("🔑 Recover Album PIN")
+def recover_album_pin_dialog(folder_id, user_email):
+    st.write("We will send a secure 6-digit code to your registered email to remove the album lock.")
+    if "album_otp_sent" not in st.session_state: 
+        st.session_state.album_otp_sent = False
+        
+    if not st.session_state.album_otp_sent:
+        if st.button("Send Recovery Code", type="primary", use_container_width=True):
+            if not check_rate_limit("auth_action", 4): st.stop()
+            with st.spinner("Sending code..."):
+                otp = str(secrets.randbelow(900000) + 100000)
+                users_col.update_one({"email": user_email}, {"$set": {"album_recovery_otp": otp, "album_recovery_exp": time.time() + 600}})
+                if send_otp_email(user_email, otp):
+                    st.session_state.album_otp_sent = True
+                    st.rerun()
+    else:
+        st.success(f"Code sent to {html.escape(user_email)}")
+        entered_otp = st.text_input("Enter 6-Digit Code", placeholder="123456", label_visibility="collapsed")
+        c1, c2 = st.columns(2)
+        if c1.button("Verify & Unlock", type="primary", use_container_width=True):
+            user = users_col.find_one({"email": user_email})
+            if user and user.get("album_recovery_otp") == str(entered_otp).strip() and time.time() < user.get("album_recovery_exp", 0):
+                folders_col.update_one({"_id": folder_id}, {"$set": {"is_locked": False, "lock_pin": ""}})
+                users_col.update_one({"email": user_email}, {"$unset": {"album_recovery_otp": "", "album_recovery_exp": ""}})
+                
+                # Automatically add to unlocked session state so they can view it right away
+                if str(folder_id) not in st.session_state.unlocked_albums:
+                    st.session_state.unlocked_albums.append(str(folder_id))
+                    
+                st.toast("Album successfully unlocked and PIN removed!", icon="✅")
+                st.session_state.album_otp_sent = False
+                time.sleep(1.5)
+                st.rerun()
+            else:
+                st.toast("Invalid or expired code.", icon="🚨")
+        if c2.button("Cancel", use_container_width=True):
+            st.session_state.album_otp_sent = False
+            st.rerun()
 
 @st.dialog("⚡ Developer API Access")
 def developer_api_dialog(folder_id_str):
@@ -615,18 +664,11 @@ def move_media_dialog(file_id_str):
         st.session_state.pending_move = None
         st.rerun()
 
-@st.dialog("⏳ Reaction Locked")
-def locked_reaction_dialog(remaining_seconds):
-    hours, remainder = divmod(int(remaining_seconds), 3600)
-    minutes, _ = divmod(remainder, 60)
-    st.warning("Emoji changes are locked for 24 hours after a reaction.")
-    st.info(f"Time remaining: **{hours} hours and {minutes} minutes**")
-    if st.button("Got it", use_container_width=True): st.rerun()
-
 @st.dialog("🔍 Find & Remove Duplicates")
 def find_duplicates_dialog(folder_id):
     st.write("This tool will scan the current album for exact duplicate images. It will keep one original and permanently delete the rest.")
     if st.button("Start Scan", type="primary", use_container_width=True):
+        if not check_rate_limit("scan_dupes", 10): st.stop()
         with st.spinner("Scanning album for duplicates... this may take a moment."):
             files_in_folder = list(files_col.find({"folder_id": folder_id}))
             hashes = {}
@@ -755,13 +797,15 @@ def render_preview_shared_overlay(notif_id_str):
                 p_file = files_to_preview[0]
                 safe_preview_url = html.escape(p_file["url"])
                 st.write("They reacted to this memory:")
-                st.markdown('<div class="media-container-wrapper" style="width: 150px; margin: 0 auto;">', unsafe_allow_html=True)
-                if p_file["resource_type"] == "image":
-                    st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
-                else:
-                    vid_thumb_preview = safe_preview_url.replace(".mp4", ".webm", ".jpg").replace(".mov", ".jpg")
-                    st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', unsafe_allow_html=True))
-                st.markdown('</div><br>', unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                <div class="media-container-wrapper" style="width: 150px; margin: 0 auto;">
+                    <div class="square-media" style="position:relative;">
+                        <img src="{''.join(safe_preview_url) if p_file['resource_type'] == 'image' else safe_preview_url.replace('.mp4', '.jpg').replace('.webm', '.jpg').replace('.mov', '.jpg')}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/2985/2985655.png'">
+                        {'<div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div>' if p_file['resource_type'] != 'image' else ''}
+                    </div>
+                </div><br>
+                """, unsafe_allow_html=True)
 
         if st.button("Mark as Read & Close", use_container_width=True):
             notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
@@ -783,12 +827,13 @@ def render_preview_shared_overlay(notif_id_str):
     for p_idx, p_file in enumerate(files_to_preview):
         safe_preview_url = html.escape(p_file["url"])
         with preview_cols[p_idx % 4]:
-            st.markdown('<div class="media-container-wrapper">', unsafe_allow_html=True)
-            if p_file["resource_type"] == "image":
-                st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
-            else:
-                vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="media-container-wrapper">
+                <div class="square-media" style="position:relative;">
+                    <img src="{''.join(safe_preview_url) if p_file['resource_type'] == 'image' else safe_preview_url.replace('.mp4', '.jpg').replace('.webm', '.jpg').replace('.mov', '.jpg')}" onerror="this.src='https://cdn-icons-png.flaticon.com/512/2985/2985655.png'">
+                    {'<div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div>' if p_file['resource_type'] != 'image' else ''}
+                </div>
+            """, unsafe_allow_html=True)
             with st.popover("⋮"):
                 st.markdown(f'<a href="{safe_preview_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -887,6 +932,7 @@ def render_profile_hub_overlay():
             st.info("If your safe photos were previously blurred, click here to rescan and unblur them.")
             
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
+                if not check_rate_limit("deep_scan", 30): st.stop()
                 with st.spinner("Analyzing all media with the Production AI Engine..."):
                     updated_count = 0
                     for f in files_col.find({"username": st.session_state.username}):
@@ -1033,12 +1079,13 @@ def render_ai_chat_overlay():
 def render_lightbox_fullscreen(idx, folder_id_str):
     f_id = None if folder_id_str == "root" else ObjectId(folder_id_str)
     
-    # Feature 7: PIN Protection Security Check for Fullscreen Navigation
+    # Feature 7 Bugfix: Verifies security access before opening lightbox
     if f_id:
         folder = folders_col.find_one({"_id": f_id})
-        if folder and folder.get("is_locked") and str(f_id) not in st.session_state.get("unlocked_albums", set()):
+        if folder and folder.get("is_locked") and str(f_id) not in st.session_state.get("unlocked_albums", []):
             st.query_params["folder"] = folder_id_str
             if "lightbox_idx" in st.query_params: del st.query_params["lightbox_idx"]
+            st.toast("Album is locked. Please authenticate first.", icon="🔒")
             st.rerun()
 
     files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": f_id}))
@@ -1063,7 +1110,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     close_search = f"?page=app&folder={safe_folder_id}&session={session_token}"
     safe_url = html.escape(file['url'])
 
-    # Feature 6: Fullscreen Lightbox deliberately uses RAW URL so images are naturally UNBLURRED here.
+    # Feature 6 Integration: Media renders without blur in full screen
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
@@ -1098,7 +1145,31 @@ def render_lightbox_fullscreen(idx, folder_id_str):
         
     current_react = f"<div style='position:absolute; top:25px; left:25px; font-size: 32px; z-index:10000000;'>{html.escape(file.get('tag', ''))}</div>" if file.get("tag") else ""
 
-    lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>header {{display: none !important;}} .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; left: 25px;">✕</a>{current_react}{action_html}{react_html} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
+    lightbox_ui = f"""
+    <div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;">
+        <style>
+            header {{display: none !important;}} 
+            .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} 
+            .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} 
+            .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} 
+            .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} 
+            .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} 
+            .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} 
+            .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} 
+            .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} 
+            .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} 
+            .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} 
+            .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} 
+            .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} 
+            .lightbox-react-content a:hover {{ transform: scale(1.3); }}
+        </style>
+        <a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; left: 25px;">✕</a>
+        {current_react}{action_html}{react_html} 
+        <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a>
+        <a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> 
+        {prev_button}{next_button}{media_element}
+    </div>
+    """
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
     st.stop()
 
@@ -1180,18 +1251,6 @@ if not st.session_state.logged_in:
     if app_page not in ["landing", "policy", "contact", "auth"]:
         st.query_params["page"] = "landing"
         st.rerun()
-
-    wallpaper_html = '''
-    <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; overflow: hidden; background: #000; pointer-events: none;">
-        <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
-    '''
-    for i in range(60):
-        wallpaper_html += f'<img src="https://picsum.photos/seed/{i+9000}/400/600" style="width: 12vw; height: 18vw; object-fit: cover; border-radius: 12px; opacity: 0.35;" loading="lazy">'
-    wallpaper_html += '''
-        </div>
-    </div>
-    <style>@keyframes scroll-wallpaper { 0% { transform: rotate(-15deg) translateY(0); } 100% { transform: rotate(-15deg) translateY(-50%); } }</style>
-    '''
 
     if app_page == "landing":
         landing_html = wallpaper_html + """<style>
@@ -1414,11 +1473,14 @@ div[data-testid="stAppViewBlockContainer"]::before {
 
 # ================= DASHBOARD APP (LOGGED IN) =================
 else:
+    # Feature 8 Update: Display Live Wallpaper behind the main dashboard
+    st.markdown(wallpaper_html.replace('z-index: 0;', 'z-index: -10;'), unsafe_allow_html=True)
+    
     def inject_dashboard_css():
         dash_css = """<style>
-:root { --bg-app: #f2f2f7; --bg-card: #ffffff; --bg-sidebar: #f2f2f7; --bg-input: #ffffff; --text-primary: #000000; --text-secondary: #8e8e93; --border: #d1d1d6; --accent: #007aff; --btn-hover: #e5e5ea; }
-@media (prefers-color-scheme: dark) { :root { --bg-app: #000000; --bg-card: #1c1c1e; --bg-sidebar: #000000; --bg-input: #1c1c1e; --text-primary: #ffffff; --text-secondary: #8e8e93; --border: #38383a; --accent: #0a84ff; --btn-hover: #2c2c2e; } }
-.stApp, [data-testid="stAppViewContainer"] { background-color: var(--bg-app) !important; color: var(--text-primary) !important; }
+:root { --bg-app: transparent; --bg-card: rgba(25, 25, 30, 0.85); --bg-sidebar: transparent; --bg-input: rgba(0,0,0,0.5); --text-primary: #ffffff; --text-secondary: #8e8e93; --border: rgba(255,255,255,0.1); --accent: #0a84ff; --btn-hover: rgba(255,255,255,0.1); }
+@media (prefers-color-scheme: dark) { :root { --bg-app: transparent; --bg-card: rgba(25, 25, 30, 0.85); --bg-sidebar: transparent; --bg-input: rgba(0,0,0,0.5); --text-primary: #ffffff; --text-secondary: #8e8e93; --border: rgba(255,255,255,0.1); --accent: #0a84ff; --btn-hover: rgba(255,255,255,0.1); } }
+.stApp, [data-testid="stAppViewContainer"] { background-color: transparent !important; color: var(--text-primary) !important; }
 p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
 
 div[data-testid="stAppViewBlockContainer"] { 
@@ -1435,21 +1497,21 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 .story-item { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 85px; cursor: pointer; transition: transform 0.2s; }
 .story-item:hover { transform: scale(1.05); }
 .story-ring { width: 76px; height: 76px; border-radius: 50%; padding: 3px; display: flex; align-items: center; justify-content: center; }
-.story-inner { width: 100%; height: 100%; border-radius: 50%; border: 3px solid var(--bg-app); overflow: hidden; background: var(--bg-card); display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.story-inner { width: 100%; height: 100%; border-radius: 50%; border: 3px solid #1a1a1a; overflow: hidden; background: var(--bg-card); display: flex; align-items: center; justify-content: center; font-size: 24px; }
 .story-inner img, .story-inner video { width: 100%; height: 100%; object-fit: cover; }
 .story-label { font-size: 12px; font-weight: 600; color: var(--text-primary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80px;}
 .album-link { text-decoration: none; display: block; }
 .album-card { margin-bottom: 15px; transition: transform 0.2s ease; position: relative; }
 .album-card:hover { transform: scale(1.02); }
-.folder-card { position: relative; width: 100%; aspect-ratio: 1/1; border-radius: 12px; background-color: var(--bg-card); border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 8px; transition: transform 0.2s ease; }
+.folder-card { position: relative; width: 100%; aspect-ratio: 1/1; border-radius: 12px; background-color: var(--bg-card); backdrop-filter: blur(10px); border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.2); margin-bottom: 8px; transition: transform 0.2s ease; }
 .folder-card:hover { transform: scale(1.02); }
 .media-container-wrapper { position: relative; margin-bottom: 15px; cursor: pointer; }
 .media-container-wrapper:hover .square-media { transform: scale(1.02); }
 
 /* Feature 1: CSS Animated Skeleton Loading State */
 .square-media { 
-    width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.1); 
-    background: linear-gradient(90deg, var(--bg-card) 25%, var(--border) 50%, var(--bg-card) 75%); 
+    width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.3); 
+    background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.05) 75%); 
     background-size: 200% 100%; animation: loadingSkeleton 1.5s infinite; border: 1px solid var(--border); 
 }
 @keyframes loadingSkeleton { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
@@ -1459,17 +1521,22 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 .folder-options-btn [data-testid="stPopover"] > button { background-color: var(--bg-card) !important; color: var(--text-primary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; height: 38px !important; padding: 0 15px !important; font-weight: 600 !important; box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important; }
 .folder-options-btn [data-testid="stPopover"] > button:hover { background-color: var(--btn-hover) !important; }
 [data-testid="stFileUploader"] > div { background-color: var(--bg-card) !important; border: 1px dashed var(--border) !important; border-radius: 16px !important; padding: 20px !important; }
-.profile-header-widget { display: inline-flex; align-items: center; gap: 12px; background: transparent; padding: 6px 12px; border-radius: 50px; transition: transform 0.2s; cursor: pointer; color: var(--text-primary) !important; position: relative; text-decoration: none; }
+.profile-header-widget { display: inline-flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.5); backdrop-filter: blur(10px); padding: 6px 12px; border-radius: 50px; transition: transform 0.2s; cursor: pointer; color: var(--text-primary) !important; border: 1px solid var(--border); position: relative; text-decoration: none; }
 .profile-header-widget:hover { transform: scale(1.02); text-decoration: none; }
 .profile-header-widget img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
 .profile-header-widget span { font-weight: 600; font-size: 15px;}
-.profile-notif-dot { position: absolute; top: 2px; right: 8px; width: 11px; height: 11px; background-color: #ff3b30; border-radius: 50%; border: 1.5px solid var(--bg-card); box-shadow: 0 0 5px rgba(255, 59, 48, 0.5); z-index: 20; }
+.profile-notif-dot { position: absolute; top: 2px; right: 8px; width: 11px; height: 11px; background-color: #ff3b30; border-radius: 50%; border: 1.5px solid #000; box-shadow: 0 0 5px rgba(255, 59, 48, 0.5); z-index: 20; }
 .custom-footer { margin-top: 50px; width: 100%; text-align: center; padding: 20px 0; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; clear: both; }
 @media (max-width: 768px) { .top-nav { padding: 15px 10px; flex-direction: column; gap: 15px; justify-content: center; text-align: center; } .brand-logo { font-size: 28px; margin-bottom: 10px;} div[data-testid="stAppViewBlockContainer"] { padding-top: 1rem !important; } }
 </style>"""
         st.markdown(dash_css, unsafe_allow_html=True)
 
     inject_dashboard_css()
+    
+    # Feature 2 Clean UX: Render any pending toasts instead of a dialog
+    if st.session_state.get("pending_toast"):
+        st.toast(st.session_state.pending_toast, icon="⏳")
+        st.session_state.pending_toast = None
 
     dialog_rendered = False
 
@@ -1509,11 +1576,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     if st.session_state.get("pending_move") and not dialog_rendered:
         move_media_dialog(st.session_state.pending_move)
         st.session_state.pending_move = None
-        dialog_rendered = True
-
-    if st.session_state.get("pending_locked_react") and not dialog_rendered:
-        locked_reaction_dialog(st.session_state.pending_locked_react)
-        st.session_state.pending_locked_react = None
         dialog_rendered = True
 
     user_data = users_col.find_one({"username": st.session_state.username})
@@ -1599,21 +1661,25 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     _, main_col, _ = st.columns([1, 12, 1])
     with main_col:
-        # Feature 7: PIN Protected Folder View
+        # Feature 7 & 9: PIN Protected Folder View + Recovery Flow
         if not is_root and current.get("is_locked"):
             f_id_str = str(current["_id"])
             if f_id_str not in st.session_state.unlocked_albums:
                 st.markdown(f'<div style="display:flex; align-items:center; gap: 15px; margin-bottom: 20px;"><a href="{home_link}" target="_self" style="text-decoration:none; font-weight: 600; color: var(--accent); font-size: 20px;">←</a><h2 style="margin:0;">{html.escape(current["folder_name"])} 🔒</h2></div>', unsafe_allow_html=True)
-                st.markdown(f'<div style="text-align: center; margin-top: 5vh; background: var(--bg-card); padding: 40px; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.05); max-width: 400px; margin-left: auto; margin-right: auto;"><div style="font-size: 48px; margin-bottom: 10px;">🔒</div><h3 style="margin-bottom: 10px;">Album Locked</h3><p class="muted-text" style="margin-bottom: 25px;">Please enter your PIN to access this secure album.</p>', unsafe_allow_html=True)
+                st.markdown(f'<div style="text-align: center; margin-top: 5vh; background: var(--bg-card); backdrop-filter: blur(15px); padding: 40px; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.2); max-width: 400px; margin-left: auto; margin-right: auto;"><div style="font-size: 48px; margin-bottom: 10px;">🔒</div><h3 style="margin-bottom: 10px;">Album Locked</h3><p class="muted-text" style="margin-bottom: 25px;">Please enter your PIN to access this secure album.</p>', unsafe_allow_html=True)
                 
                 col1, col2, col3 = st.columns([1, 10, 1])
                 with col2:
                     pin_attempt = st.text_input("PIN", type="password", label_visibility="collapsed", placeholder="Enter PIN")
                     if st.button("Unlock Album", type="primary", use_container_width=True):
                         if hash_password(pin_attempt) == current.get("lock_pin", ""):
-                            st.session_state.unlocked_albums.add(f_id_str)
+                            st.session_state.unlocked_albums.append(f_id_str)
                             st.rerun()
                         else: st.toast("Incorrect PIN.", icon="🚨")
+                    
+                    st.write("<br>", unsafe_allow_html=True)
+                    if st.button("Forgot PIN? Recover via Email", use_container_width=True):
+                        recover_album_pin_dialog(current["_id"], user_data["email"])
                 st.markdown('</div>', unsafe_allow_html=True)
                 st.stop()
 
@@ -1663,7 +1729,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     if st.button("🔗 Share Media Batch", key=f"share_folder_{current['_id']}", use_container_width=True):
                         st.query_params["share_folder"] = str(current['_id']); st.rerun()
                         
-                    # Feature 7 Integration: Connects Lock Toggle to the new PIN Dialogs
                     is_locked = current.get("is_locked", False)
                     if not is_locked:
                         if st.button("🔒 Lock Album", key=f"lock_fold_{current['_id']}", use_container_width=True): set_album_pin_dialog(current["_id"])
@@ -1696,6 +1761,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                             st.toast(f"⚠️ '{html.escape(file.name)}' flagged as sensitive. Blurring applied.", icon="🙈")
                                         
                                     try:
+                                        file.seek(0)
                                         res = cloudinary.uploader.upload_large(file, resource_type=r_type, chunk_size=20000000) if file.size > 50000000 else cloudinary.uploader.upload(file, resource_type=r_type)
                                         
                                         if r_type == "video":
@@ -1707,7 +1773,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                                     is_flagged = True
                                                     st.toast(f"⚠️ Video '{html.escape(file.name)}' flagged as sensitive. Blurring applied.", icon="🙈")
 
-                                        # Save to DB regardless of safety, but flag it
                                         files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "is_flagged": is_flagged, "tag": "", "tag_time": 0})
                                     except Exception as e: 
                                         st.toast(f"Failed to upload {html.escape(file.name)}.", icon="🚨")
@@ -1754,7 +1819,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     
-                    # Feature 6 Integration: Safe content renders normally, flagged content gets the blur filter.
                     if file["resource_type"] == "image":
                         if is_flagged:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" loading="lazy" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
