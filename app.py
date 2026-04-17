@@ -62,6 +62,16 @@ def load_production_ai():
     if not os.path.exists(model_path):
         return None, "ONLINE (Math Heuristic Mode - Model file missing)"
 
+    # Check if Git LFS failed and only downloaded a pointer text file
+    try:
+        if os.path.getsize(model_path) < 2000: 
+            with open(model_path, 'r', encoding='utf-8') as f:
+                content = f.read(50)
+                if "version https://git-lfs" in content:
+                    return None, "ONLINE (Math Heuristic Mode - LFS ERROR: Streamlit downloaded the text pointer, not the binary .h5 file)"
+    except Exception:
+        pass
+
     try:
         model = keras.models.load_model(model_path, compile=False)
         return model, "ONLINE (Deep Learning AI)"
@@ -78,8 +88,10 @@ def load_production_ai():
                     model = keras.models.load_model(model_path, compile=False)
                 return model, "ONLINE (Deep Learning AI - Patched)"
             except Exception as e2:
-                return None, f"ONLINE (Math Heuristic Mode - Loading Error)"
-        return None, f"ONLINE (Math Heuristic Mode - Framework Error)"
+                return None, f"ONLINE (Math Heuristic Mode - Loading Error: {str(e2)})"
+        
+        # Now it will actually output what TensorFlow is crying about on the dashboard
+        return None, f"ONLINE (Math Heuristic Mode - Error: {err_msg})"
 
 # Guaranteed Global Variables
 safety_model = None
@@ -90,7 +102,7 @@ try:
     if _ai_result and len(_ai_result) == 2:
         safety_model, model_status = _ai_result
 except Exception as fatal_e:
-    model_status = f"ONLINE (Math Heuristic Mode - Execution Error)"
+    model_status = f"ONLINE (Math Heuristic Mode - Fatal Execution Error: {str(fatal_e)})"
 
 def calculate_skin_ratio(pil_img):
     """Mathematical fallback algorithm for skin detection acting as the Manager when AI fails."""
