@@ -247,6 +247,21 @@ if api_req_key:
 # ==========================================
 # 5. UTILITIES, VALIDATION & MIDDLEWARE
 # ==========================================
+
+def get_optimized_url(url, r_type="image", width=400):
+    """Dynamically applies Cloudinary transformations for lightning-fast thumbnail loads."""
+    if not url or "cloudinary.com" not in url: 
+        return url
+    parts = url.split("/upload/")
+    if len(parts) == 2:
+        if r_type == "video":
+            base = parts[0] + f"/upload/c_fill,w_{width},q_auto,f_auto/" + parts[1]
+            for ext in [".mp4", ".webm", ".mov"]: base = base.replace(ext, ".jpg")
+            return base
+        else:
+            return parts[0] + f"/upload/c_limit,w_{width},q_auto,f_auto/" + parts[1]
+    return url
+
 def check_rate_limit(action, cooldown_seconds=3):
     if 'rate_limits' not in st.session_state:
         st.session_state.rate_limits = {}
@@ -404,7 +419,6 @@ if st.session_state.logged_in:
                 elif action == "move":
                     st.session_state.pending_move = str(fid)
                 elif action == "locked_react":
-                    # UI Clean Update: Sets a toast notification instead of a dialog
                     rem = max(0, 86400 - (time.time() - file.get("tag_time", 0)))
                     h, rem_s = divmod(int(rem), 3600)
                     m, _ = divmod(rem_s, 60)
@@ -551,7 +565,6 @@ def recover_album_pin_dialog(folder_id, user_email):
                 folders_col.update_one({"_id": folder_id}, {"$set": {"is_locked": False, "lock_pin": ""}})
                 users_col.update_one({"email": user_email}, {"$unset": {"album_recovery_otp": "", "album_recovery_exp": ""}})
                 
-                # Automatically add to unlocked session state so they can view it right away
                 if str(folder_id) not in st.session_state.unlocked_albums:
                     st.session_state.unlocked_albums.append(str(folder_id))
                     
@@ -834,7 +847,7 @@ def render_preview_shared_overlay(notif_id_str):
                     {'<div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div>' if p_file['resource_type'] != 'image' else ''}
                 </div>
             """, unsafe_allow_html=True)
-            with st.popover("⋮"):
+            with st.popover("⋮", use_container_width=True):
                 st.markdown(f'<a href="{safe_preview_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
             
@@ -1108,9 +1121,11 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     next_search = f"?page=app&folder={safe_folder_id}&lightbox_idx={idx + 1}&session={session_token}"
     prev_search = f"?page=app&folder={safe_folder_id}&lightbox_idx={idx - 1}&session={session_token}"
     close_search = f"?page=app&folder={safe_folder_id}&session={session_token}"
+    
+    # Feature 6 Integration: Media renders without blur in full screen
+    # Use standard safe_url for Lightbox to keep full resolution
     safe_url = html.escape(file['url'])
 
-    # Feature 6 Integration: Media renders without blur in full screen
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
@@ -1518,8 +1533,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 .square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; display: block; position: relative; z-index: 2; }
 
 [data-testid="column"] { position: relative; }
-.folder-options-btn [data-testid="stPopover"] > button { background-color: var(--bg-card) !important; color: var(--text-primary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; height: 38px !important; padding: 0 15px !important; font-weight: 600 !important; box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important; }
-.folder-options-btn [data-testid="stPopover"] > button:hover { background-color: var(--btn-hover) !important; }
+[data-testid="stPopover"] > button { background-color: var(--bg-card) !important; color: var(--text-primary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; height: 38px !important; padding: 0 15px !important; font-weight: 600 !important; box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important; }
+[data-testid="stPopover"] > button:hover { background-color: var(--btn-hover) !important; }
 [data-testid="stFileUploader"] > div { background-color: var(--bg-card) !important; border: 1px dashed var(--border) !important; border-radius: 16px !important; padding: 20px !important; }
 .profile-header-widget { display: inline-flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.5); backdrop-filter: blur(10px); padding: 6px 12px; border-radius: 50px; transition: transform 0.2s; cursor: pointer; color: var(--text-primary) !important; border: 1px solid var(--border); position: relative; text-decoration: none; }
 .profile-header-widget:hover { transform: scale(1.02); text-decoration: none; }
@@ -1628,9 +1643,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     st.markdown(header_html.replace('\n', ''), unsafe_allow_html=True)
     st.write("<br>", unsafe_allow_html=True) 
 
-    if safety_model is not None:
-        st.success(f"✅ Manager Engine is {model_status}.")
-    else:
+    # Silent AI logging to ensure clean UI
+    if safety_model is None:
         st.error(f"🚨 Manager Engine is {model_status}. Uploads are strictly blocked until the AI is restored.")
     
     if is_root and st.session_state.story_groups:
@@ -1645,11 +1659,10 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
             safe_url = html.escape(first_media["url"])
             safe_label = html.escape(group["label"])
             
-            thumb_html = f'<img src="{safe_url}" loading="lazy">'
-            if first_media.get("resource_type") == "video":
-                vid_thumb = safe_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                thumb_html = f'<img src="{vid_thumb}" loading="lazy" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'">'
+            # Apply dynamic resize optimization to stories
+            opt_thumb = get_optimized_url(safe_url, r_type=first_media.get("resource_type", "image"), width=300)
             
+            thumb_html = f'<img src="{opt_thumb}" loading="lazy" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'">'
             story_html += f'<a href="{get_nav_link(page="app", folder="root", story_group=g_idx, story_idx=0)}" target="_self" class="story-link"><div class="story-item"><div class="story-ring" style="background: {c};"><div class="story-inner">{thumb_html}</div></div><div class="story-label">{safe_label}</div></div></a>'
         
         story_html += '</div>'
@@ -1661,15 +1674,20 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     _, main_col, _ = st.columns([1, 12, 1])
     with main_col:
-        # Feature 7 & 9: PIN Protected Folder View + Recovery Flow
+        # Feature 7 & 9: PIN Protected Folder View + Recovery Flow Clean UI Restructure
         if not is_root and current.get("is_locked"):
             f_id_str = str(current["_id"])
             if f_id_str not in st.session_state.unlocked_albums:
-                st.markdown(f'<div style="display:flex; align-items:center; gap: 15px; margin-bottom: 20px;"><a href="{home_link}" target="_self" style="text-decoration:none; font-weight: 600; color: var(--accent); font-size: 20px;">←</a><h2 style="margin:0;">{html.escape(current["folder_name"])} 🔒</h2></div>', unsafe_allow_html=True)
-                st.markdown(f'<div style="text-align: center; margin-top: 5vh; background: var(--bg-card); backdrop-filter: blur(15px); padding: 40px; border-radius: 16px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,0.2); max-width: 400px; margin-left: auto; margin-right: auto;"><div style="font-size: 48px; margin-bottom: 10px;">🔒</div><h3 style="margin-bottom: 10px;">Album Locked</h3><p class="muted-text" style="margin-bottom: 25px;">Please enter your PIN to access this secure album.</p>', unsafe_allow_html=True)
-                
-                col1, col2, col3 = st.columns([1, 10, 1])
-                with col2:
+                _, center_lock, _ = st.columns([1, 2, 1])
+                with center_lock:
+                    st.markdown(f'''
+                    <div style="text-align: center; margin-top: 5vh; background: var(--bg-card); backdrop-filter: blur(15px); padding: 40px 20px 20px 20px; border-radius: 16px 16px 0 0; border: 1px solid var(--border); border-bottom: none;">
+                        <div style="font-size: 48px; margin-bottom: 10px;">🔒</div>
+                        <h3 style="margin-bottom: 10px;">{html.escape(current["folder_name"])} Locked</h3>
+                        <p class="muted-text" style="margin-bottom: 10px;">Enter your PIN to access this secure album.</p>
+                    </div>
+                    ''', unsafe_allow_html=True)
+                    
                     pin_attempt = st.text_input("PIN", type="password", label_visibility="collapsed", placeholder="Enter PIN")
                     if st.button("Unlock Album", type="primary", use_container_width=True):
                         if hash_password(pin_attempt) == current.get("lock_pin", ""):
@@ -1680,7 +1698,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.write("<br>", unsafe_allow_html=True)
                     if st.button("Forgot PIN? Recover via Email", use_container_width=True):
                         recover_album_pin_dialog(current["_id"], user_data["email"])
-                st.markdown('</div>', unsafe_allow_html=True)
+                        
+                    st.markdown(f'<div style="text-align:center; margin-top: 20px;"><a href="{home_link}" target="_self" style="text-decoration:none; color: var(--accent); font-weight:600;">← Back to Home</a></div>', unsafe_allow_html=True)
                 st.stop()
 
         with st.spinner("Decrypting vault..."):
@@ -1691,7 +1710,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
         unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
         files = pinned_files + unpinned_files
 
-        c_title, c_actions = st.columns([10, 2])
+        c_title, c_actions = st.columns([9, 3])
         
         if is_root:
             c_title.markdown(f'<h2 style="margin:0;">{title_text}</h2>', unsafe_allow_html=True)
@@ -1709,7 +1728,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                             folders_col.insert_one({"username": st.session_state.username, "folder_name": clean_folder_name, "parent_id": actual_folder_id, "cover_photo": "", "is_locked": False, "api_key": "", "api_enabled": False})
                             st.session_state.folder_key += 1; st.rerun()
             else:
-                st.markdown('<div class="folder-options-btn" style="display: flex; justify-content: flex-end;">', unsafe_allow_html=True)
                 with st.popover("⋮ Options", use_container_width=True):
                     st.markdown("**Album Management**")
                     if st.button("✏️ Rename Album", key=f"edit_{current['_id']}", use_container_width=True): rename_folder_dialog(current["_id"], current["folder_name"])
@@ -1752,7 +1770,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                     file_bytes = file.getvalue()
                                     file.seek(0)
                                     
-                                    # Feature 6: Smart Filtering. Do not block, just flag and notify.
                                     is_flagged = False
                                     if r_type == "image":
                                         is_safe = is_safe_content(file_bytes, safety_model)
@@ -1778,8 +1795,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                         st.toast(f"Failed to upload {html.escape(file.name)}.", icon="🚨")
                                         
                             st.session_state.uploader_key += 1; st.rerun()
-                            
-                st.markdown('</div>', unsafe_allow_html=True)
+
         st.write("<br>", unsafe_allow_html=True)
 
         if not folders and not files:
@@ -1795,7 +1811,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     safe_fname = html.escape(folder['folder_name'])
                     
                     if cover:
-                        html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div class="album-card"><div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid var(--border); position: relative;">{lock_indicator}<img src="{html.escape(cover)}" loading="lazy" style="width: 100%; height: 100%; object-fit: cover;"></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
+                        opt_cover = get_optimized_url(cover, r_type="image", width=300)
+                        html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div class="album-card"><div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid var(--border); position: relative;">{lock_indicator}<img src="{html.escape(opt_cover)}" loading="lazy" style="width: 100%; height: 100%; object-fit: cover;"></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     else:
                         html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
@@ -1814,20 +1831,22 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     session_token = html.escape(st.query_params.get('session', ''))
                     safe_folder_id = html.escape(str(actual_folder_id) if actual_folder_id else 'root')
                     lb_url = f"?page=app&folder={safe_folder_id}&lightbox_idx={i}&session={session_token}"
-                    safe_url = html.escape(file["url"])
-                    is_flagged = file.get("is_flagged", False)
                     
+                    safe_url = html.escape(file["url"])
+                    # Use dynamically optimized URLs here for huge performance gains
+                    opt_url = get_optimized_url(safe_url, r_type=file["resource_type"], width=400)
+                    
+                    is_flagged = file.get("is_flagged", False)
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     
                     if file["resource_type"] == "image":
                         if is_flagged:
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" loading="lazy" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{opt_url}" loading="lazy" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
                         else:
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" loading="lazy"></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{opt_url}" loading="lazy"></div>'
                     else:
                         if is_flagged:
-                            vid_thumb_preview = safe_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{vid_thumb_preview}" loading="lazy" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{opt_url}" loading="lazy" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
                     media_html += '</a>'
