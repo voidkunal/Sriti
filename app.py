@@ -21,6 +21,7 @@ import html
 import secrets 
 import io
 import requests
+import re # Added for backend validation
 
 import tensorflow as tf
 from PIL import Image
@@ -53,7 +54,6 @@ EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="4
 @st.cache_resource(show_spinner=False)
 def load_production_ai():
     """Native loading for the modern Keras 3 model. 100% AI strictly enforced."""
-    # Matches your newly uploaded filename exactly
     model_path = 'new_custom_nsfw_model.keras'
     
     if not os.path.exists(model_path):
@@ -75,10 +75,7 @@ def load_production_ai():
         err_msg = str(e)
         return None, f"OFFLINE (AI Load Error: {err_msg})"
 
-# Guaranteed Global Variables
-safety_model = None
-model_status = "Initializing..."
-
+safety_model, model_status = None, "Initializing..."
 try:
     _ai_result = load_production_ai()
     if _ai_result and len(_ai_result) == 2:
@@ -87,15 +84,13 @@ except Exception as fatal_e:
     model_status = f"OFFLINE (Fatal Execution Error: {str(fatal_e)})"
 
 def is_safe_content(file_bytes, model):
-    """Evaluates media strictly using the Deep Learning AI. No math fallback."""
+    """Evaluates media strictly using the Deep Learning AI."""
     if model is None:
-        # STRICT SECURITY RULE: If AI is offline, instantly fail and block the upload.
         print("Warning: AI model is offline. Blocking upload.")
         return False 
 
     try:
         pil_img = Image.open(io.BytesIO(file_bytes)).convert('RGB')
-            
         target_size = (224, 224) 
         if model.input_shape and len(model.input_shape) >= 3 and model.input_shape[1] is not None:
             target_size = (model.input_shape[1], model.input_shape[2])
@@ -103,27 +98,22 @@ def is_safe_content(file_bytes, model):
         img_array = np.array(pil_img.resize(target_size, Image.Resampling.BILINEAR), dtype=np.float32)
         raw_array = np.expand_dims(img_array, axis=0) 
         
-        # Predict using the pure neural network
         pred = model.predict(raw_array, verbose=0)[0]
-        
-        # New model outputs a single sigmoid probability (0=Safe, 1=NSFW)
-        # Threshold set to 60% confidence
         is_nsfw = pred[0] >= 0.60
-            
         return not is_nsfw
     except Exception as e:
         print(f"Prediction Error: {e}")
-        return False # Fail closed on error to protect the vault
+        return False 
 
 # ==========================================
-# 3. DATABASE & CLOUD CONFIGURATION
+# 3. DATABASE, API OPTIMISATION & CONFIG
 # ==========================================
 try:
     MONGO_URI = st.secrets["MONGO_URI"]
     client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
     client.admin.command('ping') 
 except Exception as e:
-    st.error(f"🚨 Critical Database Error: Cannot connect to MongoDB. Check your MONGO_URI and ensure your IP is whitelisted in Atlas. Details: {str(e)}")
+    st.error(f"🚨 Critical Database Error: Cannot connect to MongoDB. Details: {str(e)}")
     st.stop()
 
 db = client["memory_vault"]
@@ -132,6 +122,15 @@ folders_col = db["folders"]
 shares_col = db["shares"]             
 notifications_col = db["notifications"] 
 files_col = db["files"]
+
+# Feature 4: API Optimisation (Database Indexing)
+try:
+    users_col.create_index("email")
+    users_col.create_index("session_token")
+    files_col.create_index([("username", 1), ("folder_id", 1)])
+    folders_col.create_index([("username", 1), ("parent_id", 1)])
+except Exception:
+    pass
 
 try:
     cloudinary.config(
@@ -195,25 +194,18 @@ if api_req_key:
                 .left-arrow {{ left: 0px; }}
                 .right-arrow {{ right: 0px; }}
             </style>
-            
             <div class="carousel-wrapper" id="carouselWrapper">
                 <button class="slide-arrow left-arrow" onclick="slideLeft()">&#10094;</button>
-                <div class="carousel-track" id="carouselTrack">
-                    {media_html}
-                </div>
+                <div class="carousel-track" id="carouselTrack">{media_html}</div>
                 <button class="slide-arrow right-arrow" onclick="slideRight()">&#10095;</button>
             </div>
-            
             <script>
                 const track = document.getElementById("carouselTrack");
                 const scrollAmount = 270; 
                 function slideLeft() {{ track.scrollBy({{ left: -scrollAmount, behavior: 'smooth' }}); }}
                 function slideRight() {{ 
-                    if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{
-                        track.scrollTo({{ left: 0, behavior: 'smooth' }});
-                    }} else {{
-                        track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); 
-                    }}
+                    if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 10) {{ track.scrollTo({{ left: 0, behavior: 'smooth' }}); }} 
+                    else {{ track.scrollBy({{ left: scrollAmount, behavior: 'smooth' }}); }}
                 }}
                 let autoSlide = setInterval(slideRight, 3500);
                 const wrapper = document.getElementById('carouselWrapper');
@@ -225,13 +217,30 @@ if api_req_key:
         else:
             st.markdown('<p style="color: white; text-align: center;">Gallery is empty.</p>', unsafe_allow_html=True)
     else:
-        st.error("Access Denied. Invalid or disabled API Key.")
-        
+        st.toast("Access Denied. Invalid or disabled API Key.", icon="🚨")
     st.stop()
 
 # ==========================================
-# 5. UTILITIES & SECURITY FUNCTIONS
+# 5. UTILITIES, VALIDATION & MIDDLEWARE
 # ==========================================
+
+# Feature 3: Debouncing & Throttling (Rate Limiter)
+def check_rate_limit(action, cooldown_seconds=3):
+    if 'rate_limits' not in st.session_state:
+        st.session_state.rate_limits = {}
+    now = time.time()
+    last_action = st.session_state.rate_limits.get(action, 0)
+    if now - last_action < cooldown_seconds:
+        st.toast(f"Too fast! Please wait {int(cooldown_seconds - (now - last_action))}s.", icon="⏳")
+        return False
+    st.session_state.rate_limits[action] = now
+    return True
+
+# Feature 5: Proper Backend Validation
+def validate_email(email):
+    pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+    return re.match(pattern, email)
+
 def hash_password(password):
     pwd_str = str(password).strip()
     pepper = st.secrets.get("APP_PEPPER", "")
@@ -247,8 +256,11 @@ def time_ago(ts):
 
 def register(email, password, first_name, last_name, birthday, pin_code, phone_number):
     email = str(email).strip().lower()
-    existing_count = users_col.count_documents({"email": email})
     
+    if not validate_email(email): return "INVALID_EMAIL"
+    if len(password) < 6: return "WEAK_PASSWORD"
+
+    existing_count = users_col.count_documents({"email": email})
     if existing_count >= 5: return "MAX_ACCOUNTS"
     if existing_count > 0 and not str(phone_number).strip(): return "PHONE_REQUIRED"
 
@@ -276,13 +288,12 @@ def login(email, password):
     email = str(email).strip().lower()
     user = users_col.find_one({"email": email, "password": hash_password(password)})
     if user: return user["username"]
-    time.sleep(1)
+    time.sleep(1) # Intentional minor delay to thwart brute-force
     return False
 
 def delete_folder_tree(folder_id):
     subfolders = list(folders_col.find({"parent_id": folder_id}))
-    for sub in subfolders:
-        delete_folder_tree(sub["_id"])
+    for sub in subfolders: delete_folder_tree(sub["_id"])
     files = list(files_col.find({"folder_id": folder_id}))
     for f in files:
         if files_col.count_documents({"public_id": f["public_id"]}) <= 1:
@@ -308,10 +319,10 @@ def send_otp_email(receiver_email, otp):
         server.quit()
         return True
     except smtplib.SMTPAuthenticationError:
-        st.error("🚨 Email Auth Failed: Google blocked the login. Ensure you are using a 16-letter Google 'App Password' inside secrets.toml, NOT your normal Gmail password.")
+        st.toast("Email Auth Failed: Google blocked login. Use a 16-letter App Password.", icon="🚨")
         return False
     except Exception as e:
-        st.error(f"🚨 Email Sending Failed: {str(e)}")
+        st.toast(f"Email Sending Failed: {str(e)}", icon="🚨")
         return False
 
 # ==========================================
@@ -331,8 +342,7 @@ def get_nav_link(page=None, view=None, tab=None, folder=None, story_group=None, 
     if react is not None: params.append(f"react={react}")
     if action is not None: params.append(f"action={action}")
     if file_id is not None: params.append(f"file_id={file_id}")
-    if "session" in st.query_params:
-        params.append(f"session={html.escape(st.query_params['session'])}")
+    if "session" in st.query_params: params.append(f"session={html.escape(st.query_params['session'])}")
     return "?" + "&".join(params)
 
 app_page = st.query_params.get("page", "landing")
@@ -346,8 +356,7 @@ defaults = {
     "login_step": 0, "login_email": ""
 }
 for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    if k not in st.session_state: st.session_state[k] = v
 
 if not st.session_state.logged_in and "session" in st.query_params:
     token = str(st.query_params["session"]).strip()
@@ -367,30 +376,22 @@ if st.session_state.logged_in:
             file = files_col.find_one({"_id": fid})
             
             if file:
-                if action == "confirm_delete":
-                    st.session_state.pending_delete = str(fid)
-                elif action == "move":
-                    st.session_state.pending_move = str(fid)
+                if action == "confirm_delete": st.session_state.pending_delete = str(fid)
+                elif action == "move": st.session_state.pending_move = str(fid)
                 elif action == "locked_react":
                     time_elapsed = time.time() - file.get("tag_time", 0)
                     st.session_state.pending_locked_react = max(0, 86400 - time_elapsed)
                 elif action == "pin":
-                    if file.get("pin_order", 0) > 0:
-                        files_col.update_one({"_id": fid}, {"$unset": {"pin_order": ""}})
+                    if file.get("pin_order", 0) > 0: files_col.update_one({"_id": fid}, {"$unset": {"pin_order": ""}})
                     else:
                         max_pin = files_col.find_one({"folder_id": file["folder_id"], "pin_order": {"$exists": True}}, sort=[("pin_order", -1)])
-                        new_pin_val = 1
-                        if max_pin and "pin_order" in max_pin:
-                            new_pin_val = max_pin["pin_order"] + 1
+                        new_pin_val = max_pin["pin_order"] + 1 if max_pin and "pin_order" in max_pin else 1
                         files_col.update_one({"_id": fid}, {"$set": {"pin_order": new_pin_val}})
                 elif action == "cover":
                     url = file["url"]
-                    if file["resource_type"] == "video":
-                        url = url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
+                    if file["resource_type"] == "video": url = url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                     folders_col.update_one({"_id": file["folder_id"]}, {"$set": {"cover_photo": url}})
-                elif action == "share":
-                    st.session_state.pending_share = str(fid)
-
+                elif action == "share": st.session_state.pending_share = str(fid)
         except InvalidId: pass
         
         if "action" in st.query_params: del st.query_params["action"]
@@ -409,8 +410,7 @@ if st.session_state.logged_in:
                 if s_grp < len(st.session_state.story_groups):
                     items = st.session_state.story_groups[s_grp]["items"]
                     if s_idx < len(items):
-                        file_id = items[s_idx]["_id"]
-                        files_col.update_one({"_id": file_id}, {"$set": {"tag": st.query_params["react"], "tag_time": time.time()}})
+                        files_col.update_one({"_id": items[s_idx]["_id"]}, {"$set": {"tag": st.query_params["react"], "tag_time": time.time()}})
         except Exception: pass
         
         if "react" in st.query_params: del st.query_params["react"]
@@ -420,26 +420,19 @@ if st.session_state.logged_in:
 # ==========================================
 # 8. DETERMINISTIC STORY ENGINE
 # ==========================================
-if st.session_state.logged_in:
-    time_window = int(time.time() / 300) 
-    random.seed(f"{st.session_state.username}_{time_window}") 
-    
-    all_user_media = list(files_col.find({"username": st.session_state.username}))
+@st.cache_data(ttl=300) # Feature 4: Caching DB heavy-compute logic
+def generate_stories(username, time_window):
+    random.seed(f"{username}_{time_window}") 
+    all_user_media = list(files_col.find({"username": username}))
     story_groups = []
     
     if all_user_media:
         now = datetime.datetime.now(datetime.timezone.utc)
         recent, favorites, throwback = [], [], []
         for f in all_user_media:
-            upload_date = f["_id"].generation_time
-            age_days = (now - upload_date).days
+            age_days = (now - f["_id"].generation_time).days
             if age_days <= 7: recent.append(f)
-            
-            if f.get("tag"):
-                tag_age_seconds = time.time() - f.get("tag_time", 0)
-                if tag_age_seconds >= 604800:
-                    favorites.append(f)
-                    
+            if f.get("tag") and (time.time() - f.get("tag_time", 0)) >= 604800: favorites.append(f)
             if age_days > 30: throwback.append(f)
                 
         if recent:
@@ -455,9 +448,11 @@ if st.session_state.logged_in:
         random_media = all_user_media[:]
         random.shuffle(random_media)
         story_groups.append({"label": "Discover", "items": random_media[:6]})
-            
-    st.session_state.story_groups = story_groups
-    random.seed() 
+    return story_groups
+
+if st.session_state.logged_in:
+    time_window = int(time.time() / 300) 
+    st.session_state.story_groups = generate_stories(st.session_state.username, time_window)
 
 # ==========================================
 # 9. DIALOGS & OVERLAYS
@@ -466,7 +461,6 @@ if st.session_state.logged_in:
 def developer_api_dialog(folder_id_str):
     fid = ObjectId(folder_id_str)
     folder = folders_col.find_one({"_id": fid})
-    
     st.markdown("### Read-Only API Integration")
     st.write("Generate a REST endpoint to safely embed this album's media on your external website, portfolio, or app.")
     
@@ -491,15 +485,8 @@ def developer_api_dialog(folder_id_str):
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("#### Quick Integration Snippets")
         t1, t2 = st.tabs(["React (MERN)", "Python"])
-        with t1:
-            st.code(f"""// React / Next.js
-import {{ useEffect, useState }} from 'react';
-export default function Gallery() {{
-  const [media, setMedia] = useState([]);
-  useEffect(() => {{ fetch('{endpoint_url}').then(r=>r.text()).then(t=>console.log(t)) }}, []);
-}}""", language="javascript")
-        with t2:
-            st.code(f"""import requests\nresp = requests.get('{endpoint_url}')""", language="python")
+        with t1: st.code(f"// React / Next.js\nimport {{ useEffect, useState }} from 'react';\nexport default function Gallery() {{\n  const [media, setMedia] = useState([]);\n  useEffect(() => {{ fetch('{endpoint_url}').then(r=>r.text()).then(t=>console.log(t)) }}, []);\n}}", language="javascript")
+        with t2: st.code(f"import requests\nresp = requests.get('{endpoint_url}')", language="python")
 
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
@@ -539,11 +526,10 @@ def move_media_dialog(file_id_str):
         fid = ObjectId(file_id_str)
         file = files_col.find_one({"_id": fid})
         if not file:
-            st.error("File not found")
+            st.toast("File not found", icon="🚨")
             if st.button("Close"): st.rerun()
             return
-    except Exception:
-        st.rerun()
+    except Exception: st.rerun()
 
     folders = list(folders_col.find({"username": st.session_state.username}))
     folder_options = {f["folder_name"] + (" (Home)" if f["folder_name"]=="root" else "") : f["_id"] for f in folders}
@@ -553,8 +539,7 @@ def move_media_dialog(file_id_str):
 
     c1, c2 = st.columns(2)
     if c1.button("Move File", type="primary", use_container_width=True):
-        new_folder_id = folder_options[selected_folder_name]
-        files_col.update_one({"_id": fid}, {"$set": {"folder_id": new_folder_id}})
+        files_col.update_one({"_id": fid}, {"$set": {"folder_id": folder_options[selected_folder_name]}})
         st.session_state.pending_move = None
         st.rerun()
     if c2.button("Cancel", use_container_width=True):
@@ -571,37 +556,32 @@ def locked_reaction_dialog(remaining_seconds):
 
 @st.dialog("🔍 Find & Remove Duplicates")
 def find_duplicates_dialog(folder_id):
-    st.write("This tool will scan the current album for exact duplicate images. It will keep one original and permanently delete the rest.")
+    st.write("This tool scans the current album for exact duplicate images and permanently deletes extras.")
     if st.button("Start Scan", type="primary", use_container_width=True):
-        with st.spinner("Scanning album for duplicates... this may take a moment."):
+        if not check_rate_limit("scan_dupes", 10): st.stop() # Rate Limit heavy action
+        with st.spinner("Scanning album for duplicates..."):
             files_in_folder = list(files_col.find({"folder_id": folder_id}))
-            hashes = {}
-            duplicates_to_delete = []
-
+            hashes, duplicates_to_delete = {}, []
             for f in files_in_folder:
                 try:
-                    response = requests.get(f["url"])
-                    if response.status_code == 200:
-                        file_hash = hashlib.md5(response.content).hexdigest()
-                        if file_hash in hashes:
-                            duplicates_to_delete.append(f)
-                        else:
-                            hashes[file_hash] = f
-                except Exception:
-                    pass
+                    resp = requests.get(f["url"])
+                    if resp.status_code == 200:
+                        file_hash = hashlib.md5(resp.content).hexdigest()
+                        if file_hash in hashes: duplicates_to_delete.append(f)
+                        else: hashes[file_hash] = f
+                except Exception: pass
 
             if duplicates_to_delete:
                 for df in duplicates_to_delete:
                     if files_col.count_documents({"public_id": df["public_id"]}) <= 1:
                         cloudinary.uploader.destroy(df["public_id"], resource_type=df["resource_type"])
                     files_col.delete_one({"_id": df["_id"]})
-                
-                st.success(f"Cleaned up! Found and removed {len(duplicates_to_delete)} duplicate files.")
-                time.sleep(2.5)
+                st.toast(f"Found and removed {len(duplicates_to_delete)} duplicate files.", icon="✅")
+                time.sleep(2)
                 st.rerun()
             else:
-                st.info("No duplicates found in this album! Everything looks clean.")
-                time.sleep(2.5)
+                st.toast("No duplicates found in this album!", icon="✨")
+                time.sleep(2)
                 st.rerun()
 
 def render_share_media_overlay(target_data, mode):
@@ -613,28 +593,22 @@ def render_share_media_overlay(target_data, mode):
         st.session_state.pending_share = None
         st.rerun()
 
-    curr_user = users_col.find_one({"username": st.session_state.username})
-    user_pin = curr_user.get("pin_code", "")
-    
+    user_pin = users_col.find_one({"username": st.session_state.username}).get("pin_code", "")
     try:
         if mode == "folder":
             cf_id = None if target_data == "root" else ObjectId(target_data)
             folder_files = list(files_col.find({"username": st.session_state.username, "folder_id": cf_id}))
-            if not folder_files:
-                st.info("No media files found to share in this folder.")
-                st.stop()
-            st.markdown("### 1. Select Media to Share")
+            if not folder_files: st.info("No media files found."); st.stop()
+            st.markdown("### 1. Select Media")
             media_options = {html.escape(f['filename']) if f.get('filename') else str(f['_id']): f['_id'] for f in folder_files}
-            selected_media_filenames = st.multiselect("Choose files from this album:", list(media_options.keys()), default=list(media_options.keys()), key="ms_media")
+            selected_media_filenames = st.multiselect("Choose files:", list(media_options.keys()), default=list(media_options.keys()))
             selected_media_ids = [media_options[name] for name in selected_media_filenames]
         else:
             selected_media_ids = [ObjectId(target_data)]
             st.markdown("### 1. Share File")
             file_doc = files_col.find_one({"_id": selected_media_ids[0]})
             if file_doc: st.write(f"Sharing: **{html.escape(file_doc.get('filename', 'Media Item'))}**")
-    except InvalidId:
-        st.error("Invalid media reference.")
-        st.stop()
+    except InvalidId: st.toast("Invalid media reference.", icon="🚨"); st.stop()
 
     st.markdown("### 2. Discover Users")
     tab_n, tab_s = st.tabs(["📍 Nearby Users", "🔍 Search Global"])
@@ -642,37 +616,29 @@ def render_share_media_overlay(target_data, mode):
     
     with tab_n:
         nearby_users = list(users_col.find({"pin_code": user_pin, "username": {"$ne": st.session_state.username}}))
-        if nearby_users:
-            sel_n = st.multiselect("Users in your area", [u["username"] for u in nearby_users], key="ms_nearby")
-            selected_users.extend(sel_n)
+        if nearby_users: selected_users.extend(st.multiselect("Users in your area", [u["username"] for u in nearby_users]))
         else: st.info("No users found with your PIN code.")
             
     with tab_s:
-        sq = st.text_input("Search by username", key="search_user_input")
+        sq = st.text_input("Search by username")
         if sq:
             s_res = list(users_col.find({"username": {"$regex": sq, "$options": "i"}, "username": {"$ne": st.session_state.username}}))
-            sel_s = st.multiselect("Search Results", [u["username"] for u in s_res], key="ms_search")
-            selected_users.extend(sel_s)
+            selected_users.extend(st.multiselect("Search Results", [u["username"] for u in s_res]))
             
     final_selection = list(set(selected_users))
     st.write("<br>", unsafe_allow_html=True)
     
     if st.button(f"Send to {len(final_selection)} users", type="primary", disabled=len(final_selection)==0 or len(selected_media_ids)==0, use_container_width=True):
+        if not check_rate_limit("share_action", 5): st.stop()
         for u in final_selection:
-            share_res = shares_col.insert_one({
-                "sender": st.session_state.username, "receiver": u,
-                "media_ids": selected_media_ids, "count": len(selected_media_ids), 
-                "created_at": time.time(), "is_seen": False
-            })
-            msg_text = f"shared a memory with you." if len(selected_media_ids) == 1 else f"shared a {len(selected_media_ids)} memory batch with you."
-            notifications_col.insert_one({"username": u, "sender": st.session_state.username, "type": "share", "share_id": share_res.inserted_id, "message": msg_text, "is_read": False, "created_at": time.time()})
-        st.success("Shared successfully!")
-        time.sleep(1)
+            share_res = shares_col.insert_one({"sender": st.session_state.username, "receiver": u, "media_ids": selected_media_ids, "count": len(selected_media_ids), "created_at": time.time(), "is_seen": False})
+            msg = f"shared a memory with you." if len(selected_media_ids) == 1 else f"shared a {len(selected_media_ids)} memory batch with you."
+            notifications_col.insert_one({"username": u, "sender": st.session_state.username, "type": "share", "share_id": share_res.inserted_id, "message": msg, "is_read": False, "created_at": time.time()})
+        st.toast("Shared successfully!", icon="✅"); time.sleep(1)
         if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.session_state.pending_share = None
         st.rerun()
     st.stop()
-
 
 def render_preview_shared_overlay(notif_id_str):
     st.markdown("<style>header {display: none;} .block-container {padding: 3rem 1rem !important; max-width: 900px;}</style>", unsafe_allow_html=True)
@@ -690,22 +656,18 @@ def render_preview_shared_overlay(notif_id_str):
 
     if notif.get("type") == "share_reaction":
         st.info(f"**{html.escape(notif['sender'])}** {html.escape(notif['message'])}")
-        share_id_val = notif.get("share_id")
-        if isinstance(share_id_val, str): share_id_val = ObjectId(share_id_val)
+        share_id_val = ObjectId(notif["share_id"]) if isinstance(notif.get("share_id"), str) else notif.get("share_id")
         share = shares_col.find_one({"_id": share_id_val}) if share_id_val else None
         
         if share and share.get("media_ids"):
             files_to_preview = list(files_col.find({"_id": {"$in": share.get("media_ids")[:1]}}))
             if files_to_preview:
                 p_file = files_to_preview[0]
-                safe_preview_url = html.escape(p_file["url"])
+                safe_url = html.escape(p_file["url"])
                 st.write("They reacted to this memory:")
                 st.markdown('<div class="media-container-wrapper" style="width: 150px; margin: 0 auto;">', unsafe_allow_html=True)
-                if p_file["resource_type"] == "image":
-                    st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
-                else:
-                    vid_thumb_preview = safe_preview_url.replace(".mp4", ".webm", ".jpg").replace(".mov", ".jpg")
-                    st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', unsafe_allow_html=True))
+                if p_file["resource_type"] == "image": st.markdown(f'<div class="square-media"><img src="{safe_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
+                else: st.markdown(f'<div class="square-media" style="position:relative;"><img src="{safe_url.replace(".mp4", ".jpg")}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', unsafe_allow_html=True))
                 st.markdown('</div><br>', unsafe_allow_html=True)
 
         if st.button("Mark as Read & Close", use_container_width=True):
@@ -715,27 +677,20 @@ def render_preview_shared_overlay(notif_id_str):
         st.stop()
 
     share = shares_col.find_one({"_id": notif.get("share_id")})
-    media_ids = share.get("media_ids", []) if share else []
-    if not media_ids:
-        st.error("Shared media no longer exists.")
-        st.stop()
+    if not share or not share.get("media_ids"): st.toast("Shared media no longer exists.", icon="🚨"); st.stop()
 
-    st.markdown(f"**From:** {html.escape(notif['sender'])} | **Includes:** {share['count']} memory copies.")
+    st.markdown(f"**From:** {html.escape(notif['sender'])} | **Includes:** {share['count']} items.")
     st.write("<br>", unsafe_allow_html=True)
     
-    files_to_preview = list(files_col.find({"_id": {"$in": media_ids}}))
+    files_to_preview = list(files_col.find({"_id": {"$in": share["media_ids"]}}))
     preview_cols = st.columns(4)
     for p_idx, p_file in enumerate(files_to_preview):
-        safe_preview_url = html.escape(p_file["url"])
+        safe_url = html.escape(p_file["url"])
         with preview_cols[p_idx % 4]:
             st.markdown('<div class="media-container-wrapper">', unsafe_allow_html=True)
-            if p_file["resource_type"] == "image":
-                st.markdown(f'<div class="square-media"><img src="{safe_preview_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
-            else:
-                vid_thumb_preview = safe_preview_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                st.markdown(f'<div class="square-media" style="position:relative;"><img src="{vid_thumb_preview}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
-            with st.popover("⋮"):
-                st.markdown(f'<a href="{safe_preview_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
+            if p_file["resource_type"] == "image": st.markdown(f'<div class="square-media"><img src="{safe_url}"></div>'.replace('\n', ''), unsafe_allow_html=True)
+            else: st.markdown(f'<div class="square-media" style="position:relative;"><img src="{safe_url.replace(".mp4", ".jpg")}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-size:40px; color:white; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">▶️</div></div>'.replace('\n', ''), unsafe_allow_html=True)
+            with st.popover("⋮"): st.markdown(f'<a href="{safe_url}" download target="_blank" style="display:block; padding: 8px 16px; border: 1.5px solid var(--border); border-radius: 8px; color: var(--text-primary); text-decoration: none; text-align: center; font-weight: 600; margin-bottom: 5px;">⬇️ Download</a>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
             
     st.markdown("<hr style='border-color: rgba(255,255,255,0.2); margin-top: 30px;'>", unsafe_allow_html=True)
@@ -743,9 +698,10 @@ def render_preview_shared_overlay(notif_id_str):
     with st.popover("➕ Add Reaction"):
         e_cols = st.columns(4)
         for e_idx, em in enumerate(["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]):
-            if e_cols[e_idx % 4].button(em, key=f"sreact_{em}", use_container_width=True):
+            if e_cols[e_idx % 4].button(em, use_container_width=True):
+                if not check_rate_limit("share_react", 3): st.stop()
                 notifications_col.insert_one({"username": notif['sender'], "sender": st.session_state.username, "type": "share_reaction", "share_id": notif.get("share_id"), "message": f"reacted {em} to your shared memory.", "is_read": False, "created_at": time.time()})
-                st.success(f"Sent {em} to {html.escape(notif['sender'])}!"); time.sleep(1)
+                st.toast(f"Sent {em} to {html.escape(notif['sender'])}!", icon="✅"); time.sleep(1)
                 if "preview_notif" in st.query_params: del st.query_params["preview_notif"]
                 st.rerun()
 
@@ -754,21 +710,13 @@ def render_preview_shared_overlay(notif_id_str):
     if c1.button(f"📥 Save {share['count']} items to Album", type="primary", use_container_width=True):
         root = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
         root_id = root["_id"] if root else None
-        
         shared_folder = folders_col.find_one({"username": st.session_state.username, "folder_name": {"$regex": "^Shared Media$", "$options": "i"}, "parent_id": root_id})
-        if not shared_folder:
-            res = folders_col.insert_one({"username": st.session_state.username, "folder_name": "Shared Media", "parent_id": root_id, "cover_photo": "", "is_locked": False})
-            dest_f_id = res.inserted_id
-        else: dest_f_id = shared_folder["_id"]
+        dest_f_id = shared_folder["_id"] if shared_folder else folders_col.insert_one({"username": st.session_state.username, "folder_name": "Shared Media", "parent_id": root_id, "cover_photo": "", "is_locked": False}).inserted_id
             
-        files_col.insert_many([{
-            "username": st.session_state.username, "folder_id": dest_f_id, "filename": f"Shared from {notif['sender']} - {file.get('filename','media')}",
-            "url": file["url"], "public_id": file["public_id"], "resource_type": file["resource_type"], "tag": "", "tag_time": 0
-        } for file in files_to_preview])
-
+        files_col.insert_many([{"username": st.session_state.username, "folder_id": dest_f_id, "filename": f"Shared from {notif['sender']} - {file.get('filename','media')}", "url": file["url"], "public_id": file["public_id"], "resource_type": file["resource_type"], "tag": "", "tag_time": 0} for file in files_to_preview])
         notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
         shares_col.update_one({"_id": share["_id"]}, {"$set": {"is_seen": True}})
-        st.success("Saved to Shared Media album!"); time.sleep(1)
+        st.toast("Saved to Shared Media album!", icon="✅"); time.sleep(1)
         if "preview_notif" in st.query_params: del st.query_params["preview_notif"]
         st.rerun()
         
@@ -781,16 +729,15 @@ def render_preview_shared_overlay(notif_id_str):
 
 def render_profile_hub_overlay():
     st.markdown("<style>header {display: none;} .block-container {padding: 3rem 5% !important; max-width: 100vw;}</style>", unsafe_allow_html=True)
-    
     user_data = users_col.find_one({"username": st.session_state.username})
     
     c1, c2 = st.columns([10, 1])
     c1.markdown('<div class="dashboard-title" style="margin-bottom: 20px;">Profile Hub</div>', unsafe_allow_html=True)
-    if c2.button("✕", key="close_hub_overlay"):
+    if c2.button("✕"):
         if "profile_hub" in st.query_params: del st.query_params["profile_hub"]
         st.rerun()
 
-    p_tab1, p_tab2, p_tab3 = st.tabs(["⚙️ Settings", "🔔 Notifications", "👥 Switch Profiles"])
+    p_tab1, p_tab2, p_tab3 = st.tabs(["⚙️ Settings", "🔔 Notifications", "👥 Profiles"])
     
     with p_tab1:
         c1, c2 = st.columns([1.5, 1], gap="large")
@@ -798,56 +745,48 @@ def render_profile_hub_overlay():
             st.markdown("### Profile Settings")
             new_username = st.text_input("Username", value=user_data.get("username", ""))
             new_pin = st.text_input("PIN / Zip Code", value=user_data.get("pin_code", ""))
-            new_email = st.text_input("Email", value=user_data.get("email", ""), disabled=True)
             new_phone = st.text_input("Phone Number", value=user_data.get("phone_number", ""))
             bio = st.text_area("Bio", value=user_data.get("bio", ""))
-            pic = st.file_uploader("Profile Photo", key="profile_pic_upload")
+            pic = st.file_uploader("Profile Photo")
             
             if st.button("Save Changes", type="primary"):
                 updates = {"bio": html.escape(str(bio).strip()), "pin_code": html.escape(str(new_pin).strip()), "phone_number": html.escape(str(new_phone).strip())}
-                if pic:
-                    res = cloudinary.uploader.upload(pic)
-                    updates["profile_photo"] = res["secure_url"]
-                    
+                if pic: updates["profile_photo"] = cloudinary.uploader.upload(pic)["secure_url"]
                 clean_username = html.escape(str(new_username).strip())
+                
                 if clean_username != st.session_state.username:
-                    if users_col.find_one({"username": clean_username}): st.error("Username already taken.")
+                    if users_col.find_one({"username": clean_username}): st.toast("Username already taken.", icon="🚨")
                     else:
                         updates["username"] = clean_username
                         users_col.update_one({"username": st.session_state.username}, {"$set": updates})
                         folders_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
                         files_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
                         st.session_state.username = clean_username
-                        st.success("Profile Updated!"); time.sleep(1); st.rerun()
+                        st.toast("Profile Updated!", icon="✅"); time.sleep(1); st.rerun()
                 else:
                     users_col.update_one({"username": st.session_state.username}, {"$set": updates})
-                    st.success("Profile Updated!"); time.sleep(1); st.rerun()
+                    st.toast("Profile Updated!", icon="✅"); time.sleep(1); st.rerun()
             
             st.markdown("<hr>", unsafe_allow_html=True)
             st.markdown("### 🛠️ Fix Content Filtering")
-            st.info("If your safe photos were previously blurred, click here to rescan and unblur them.")
-            
             if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
+                if not check_rate_limit("deep_scan", 30): st.stop()
                 with st.spinner("Analyzing all media with the Production AI Engine..."):
                     updated_count = 0
                     for f in files_col.find({"username": st.session_state.username}):
                         try:
-                            check_url = f["url"]
-                            if f["resource_type"] == "video":
-                                check_url = check_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                                
+                            check_url = f["url"] if f["resource_type"] == "image" else f["url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                             resp = requests.get(check_url, timeout=5)
                             if resp.status_code == 200:
                                 safe = is_safe_content(resp.content, safety_model)
                                 files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                                 updated_count += 1
                         except Exception: pass
-                    st.success(f"Deep scan complete! Re-evaluated {updated_count} files. Your safe photos are fixed.")
+                    st.toast(f"Scan complete! Re-evaluated {updated_count} files.", icon="✅")
 
         with c2:
             st.markdown("### Reaction Analytics")
-            pipeline = [{"$match": {"username": st.session_state.username, "tag": {"$ne": ""}}}, {"$group": {"_id": "$tag", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 4}]
-            stats = list(files_col.aggregate(pipeline))
+            stats = list(files_col.aggregate([{"$match": {"username": st.session_state.username, "tag": {"$ne": ""}}}, {"$group": {"_id": "$tag", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 4}]))
             if stats:
                 scols = st.columns(2)
                 for i, stat in enumerate(stats): scols[i % 2].metric(label="React", value=html.escape(stat["_id"]), delta=f"{stat['count']} times")
@@ -863,20 +802,10 @@ def render_profile_hub_overlay():
         if st.query_params.get("confirm_all_read", "").lower() == "true":
              notifications_col.update_many({"username": st.session_state.username}, {"$set": {"is_read": True}})
              if "confirm_all_read" in st.query_params: del st.query_params["confirm_all_read"]
-             st.success("All read!"); time.sleep(1); st.rerun()
-
-        if st.query_params.get("confirm_clear_all", "").lower() == "true":
-             notifications_col.delete_many({"username": st.session_state.username})
-             if "confirm_clear_all" in st.query_params: del st.query_params["confirm_clear_all"]
-             st.success("All cleared!"); time.sleep(1); st.rerun()
+             st.rerun()
 
         st.markdown("### Your Notifications")
-        ca, cb = st.columns(2)
-        if ca.button("✔️ Mark All Read", use_container_width=True):
-            st.query_params["confirm_all_read"] = "true"; st.rerun()
-        if cb.button("🗑️ Clear All", use_container_width=True):
-            st.query_params["confirm_clear_all"] = "true"; st.rerun()
-            
+        if st.button("✔️ Mark All Read"): st.query_params["confirm_all_read"] = "true"; st.rerun()
         st.markdown("<hr style='margin: 15px 0; border-color: var(--border);'>", unsafe_allow_html=True)
 
         notifs = list(notifications_col.find({"username": st.session_state.username}).sort("created_at", -1))
@@ -884,19 +813,16 @@ def render_profile_hub_overlay():
         else:
             for n in notifs:
                 col_msg, col_del = st.columns([11, 1], vertical_alignment="center")
-                status = "🟢" if not n.get("is_read") else "⚪"
-                t_ago = time_ago(n.get("created_at", time.time()))
-                
+                status, t_ago = "🟢" if not n.get("is_read") else "⚪", time_ago(n.get("created_at", time.time()))
                 with col_msg:
-                    label = f"{status} [{t_ago}] {html.escape(n['sender'])} {n['message']}"
-                    if st.button(label, key=f"nbtn_{n['_id']}", use_container_width=True):
+                    if st.button(f"{status} [{t_ago}] {html.escape(n['sender'])} {n['message']}", key=f"nbtn_{n['_id']}", use_container_width=True):
                         notifications_col.update_one({"_id": n['_id']}, {"$set": {"is_read": True}})
                         if n.get("type") in ["share", "share_reaction"]: 
                             st.query_params["preview_notif"] = str(n['_id'])
                             if "profile_hub" in st.query_params: del st.query_params["profile_hub"]
                         st.rerun()
                 with col_del:
-                    if st.button("❌", key=f"deln_{n['_id']}", help="Delete notification"):
+                    if st.button("❌", key=f"deln_{n['_id']}"):
                         notifications_col.delete_one({"_id": n['_id']})
                         st.rerun()
 
@@ -913,9 +839,6 @@ def render_profile_hub_overlay():
                     st.query_params["session"] = token
                     if "profile_hub" in st.query_params: del st.query_params["profile_hub"]
                     st.rerun()
-                    
-        if len(siblings) < 5:
-            st.info("You can create up to 5 profiles using this email. Create a new account via the signup page using this email address.")
     st.stop()
 
 
@@ -942,9 +865,9 @@ def render_ai_chat_overlay():
                     st.markdown(msg["content"])
         
         if prompt := st.chat_input("Ask a question about your vault..."):
+            if not check_rate_limit("ai_chat", 2): st.stop()
             st.session_state.ai_messages.append({"role": "user", "content": prompt})
             
-            total_files = files_col.count_documents({"username": st.session_state.username})
             total_images = files_col.count_documents({"username": st.session_state.username, "resource_type": "image"})
             total_videos = files_col.count_documents({"username": st.session_state.username, "resource_type": "video"})
             total_folders = folders_col.count_documents({"username": st.session_state.username, "folder_name": {"$ne": "root"}})
@@ -955,14 +878,9 @@ def render_ai_chat_overlay():
                 if any(w in lower_p for w in ["photo", "image", "pic"]): reply = f"You have {total_images} photos."
                 elif any(w in lower_p for w in ["video", "vid"]): reply = f"You have {total_videos} videos."
                 elif any(w in lower_p for w in ["folder", "album"]): reply = f"You have {total_folders} albums."
-                else: reply = f"You have {total_files} items in total."
-            elif "latest" in lower_p or "recent" in lower_p:
-                 recent_file = files_col.find_one({"username": st.session_state.username}, sort=[("_id", -1)])
-                 reply = f"Your most recent file was uploaded on {recent_file['_id'].generation_time.strftime('%b %d, %Y')}." if recent_file else "You haven't uploaded anything yet."
-            elif "pin" in lower_p or "location" in lower_p:
-                reply = f"Your vault PIN is {user_doc.get('pin_code')}."
-            else:
-                reply = f"I am your Vault AI. Ask factual questions like 'how many photos do I have?' or 'what is my PIN?'."
+                else: reply = f"You have {total_images + total_videos} items in total."
+            elif "pin" in lower_p or "location" in lower_p: reply = f"Your vault PIN is {user_doc.get('pin_code')}."
+            else: reply = f"I am your Vault AI. Ask factual questions like 'how many photos do I have?' or 'what is my PIN?'."
                 
             st.session_state.ai_messages.append({"role": "assistant", "content": reply})
             st.rerun()
@@ -994,7 +912,6 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     close_search = f"?page=app&folder={safe_folder_id}&session={session_token}"
     safe_url = html.escape(file['url'])
 
-    # Lightbox displays the image/video completely unblurred for full screen view
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
     
     prev_button = f"<a href='{prev_search}' target='_self' class='liquid-btn' style='left: 4%;'>◀</a>" if has_prev == "true" else ""
@@ -1032,7 +949,6 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     lightbox_ui = f"""<div id="lightbox-container" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.9); backdrop-filter: blur(20px); box-sizing: border-box; z-index: 9999999; display: flex; align-items: center; justify-content: center;"><style>header {{display: none !important;}} .liquid-btn {{ position: absolute; display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); color: white; font-size: 24px; text-decoration: none; cursor: pointer; z-index: 10000000; transition: transform 0.2s ease; }} .liquid-btn:hover {{ transform: scale(1.1); background: rgba(255, 255, 255, 0.3); }} .lightbox-menu {{ position: absolute; top: 25px; right: 100px; z-index: 10000001; padding-bottom:20px; }} .lightbox-react-menu {{ position: absolute; top: 25px; right: 230px; z-index: 10000001; padding-bottom:20px; }} .lightbox-menu-btn {{ height: 40px; border-radius: 20px; background: rgba(255, 255, 255, 0.15); backdrop-filter: blur(20px); color: white; font-size: 16px; font-weight:600; display: flex; align-items: center; justify-content: center; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.3); padding: 0 15px; }} .lightbox-menu-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 160px; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-react-content {{ display: none; position: absolute; top: 50px; right: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px; padding: 10px; width: 220px; flex-wrap: wrap; flex-direction: row; gap: 10px; border: 1px solid rgba(255,255,255,0.2); }} .lightbox-menu:hover .lightbox-menu-content, .lightbox-menu-content:hover {{ display: flex; }} .lightbox-react-menu:hover .lightbox-react-content, .lightbox-react-content:hover {{ display: flex; }} .lightbox-menu-content a {{ color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 15px; font-family: sans-serif; font-weight: 500; display:block; }} .lightbox-menu-content a:hover {{ background: rgba(255, 255, 255, 0.2); }} .lightbox-react-content a {{ font-size: 28px; text-decoration: none; transition: transform 0.2s; cursor: pointer; line-height: 1; }} .lightbox-react-content a:hover {{ transform: scale(1.3); }}</style><a href="{close_search}" target="_self" class="liquid-btn" style="top: 25px; left: 25px;">✕</a>{current_react}{action_html}{react_html} <a href="{prev_search}" target="_self" style="position:absolute; top:100px; left:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a><a href="{next_search}" target="_self" style="position:absolute; top:100px; right:0; width:35vw; height:calc(100vh - 100px); z-index:9999990;"></a> {prev_button}{next_button}{media_element}</div>"""
     st.markdown(lightbox_ui.replace('\n', ''), unsafe_allow_html=True)
     st.stop()
-
 
 def render_story_fullscreen(group_idx, story_idx):
     groups = st.session_state.get("story_groups", [])
@@ -1225,10 +1141,10 @@ div[data-testid="stAppViewBlockContainer"]::before {
                 st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="?page=auth&view=forgot" target="_self" style="color: #aaa; font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>', unsafe_allow_html=True)
                 
                 if st.button("Request OTP to Login", type="primary", use_container_width=True):
-                    if not is_human:
-                        st.error("Please confirm you are human to proceed.")
-                    elif not email or not pwd:
-                        st.error("Please enter email and password.")
+                    if not check_rate_limit("auth_action", 4): st.stop() # Rate Limiter
+                    if not is_human: st.toast("Please confirm you are human to proceed.", icon="⚠️")
+                    elif not email or not pwd: st.toast("Please enter email and password.", icon="⚠️")
+                    elif not validate_email(email): st.toast("Invalid email format.", icon="⚠️")
                     else:
                         user = users_col.find_one({"email": email.strip().lower(), "password": hash_password(pwd)})
                         if user:
@@ -1240,7 +1156,7 @@ div[data-testid="stAppViewBlockContainer"]::before {
                                     st.session_state.login_step = 1
                                     st.rerun()
                         else:
-                            st.error("Invalid credentials.")
+                            st.toast("Invalid credentials. Please try again.", icon="🚨") # Notification style error
                             
                 st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span style="color: #aaa;">New to our platform?</span> <a href="?page=auth&view=signup" target="_self" style="color: #0a84ff; text-decoration: none; font-weight: 600;">Sign Up</a></div>', unsafe_allow_html=True)
                 
@@ -1250,6 +1166,7 @@ div[data-testid="stAppViewBlockContainer"]::before {
                 
                 c1, c2 = st.columns(2)
                 if c1.button("Verify & Login", type="primary", use_container_width=True):
+                    if not check_rate_limit("verify_otp", 2): st.stop()
                     user = users_col.find_one({"email": st.session_state.login_email, "login_otp": otp_input.strip()})
                     if user:
                         users_col.update_one({"_id": user["_id"]}, {"$unset": {"login_otp": ""}})
@@ -1264,7 +1181,7 @@ div[data-testid="stAppViewBlockContainer"]::before {
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else:
-                        st.error("Invalid or expired OTP.")
+                        st.toast("Invalid or expired OTP.", icon="🚨")
                 if c2.button("Cancel", use_container_width=True):
                     st.session_state.login_step = 0
                     st.rerun()
@@ -1281,14 +1198,15 @@ div[data-testid="stAppViewBlockContainer"]::before {
             s_agree = st.checkbox("☑️ I agree to the Privacy Policy and Terms of Service", key="s_agree")
             
             if st.button("Sign Up", type="primary", use_container_width=True):
-                if not s_agree:
-                    st.error("You must agree to the Privacy Policy to create a vault.")
-                elif not s_email or not s_pwd or not fname or not pin_code: 
-                    st.error("Please fill all core required fields.")
+                if not check_rate_limit("auth_action", 4): st.stop()
+                if not s_agree: st.toast("You must agree to the Privacy Policy.", icon="⚠️")
+                elif not s_email or not s_pwd or not fname or not pin_code: st.toast("Please fill all core required fields.", icon="⚠️")
                 else:
                     result = register(s_email, s_pwd, fname, lname, bday, pin_code, s_phone)
-                    if result == "MAX_ACCOUNTS": st.error("Maximum of 5 profiles allowed per email address.")
-                    elif result == "PHONE_REQUIRED": st.error("Phone number is required when creating multiple accounts with the same email.")
+                    if result == "MAX_ACCOUNTS": st.toast("Maximum of 5 profiles allowed per email address.", icon="🚨")
+                    elif result == "PHONE_REQUIRED": st.toast("Phone number is required when creating multiple accounts.", icon="🚨")
+                    elif result == "INVALID_EMAIL": st.toast("Invalid email format.", icon="🚨")
+                    elif result == "WEAK_PASSWORD": st.toast("Password must be at least 6 characters.", icon="🚨")
                     elif result:
                         token = str(uuid.uuid4())
                         users_col.update_one({"username": result}, {"$set": {"session_token": token}})
@@ -1304,7 +1222,8 @@ div[data-testid="stAppViewBlockContainer"]::before {
                 st.markdown('<div style="font-size: 15px; text-align: center; margin-bottom: 30px; color: #ccc;">Please enter your registered email</div>', unsafe_allow_html=True)
                 f_email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="f_email")
                 if st.button("Reset Password", type="primary", use_container_width=True):
-                    if f_email:
+                    if not check_rate_limit("auth_action", 4): st.stop()
+                    if f_email and validate_email(f_email):
                         clean_email = str(f_email).strip().lower()
                         user = users_col.find_one({"email": clean_email})
                         if user:
@@ -1314,22 +1233,23 @@ div[data-testid="stAppViewBlockContainer"]::before {
                                 users_col.update_many({"email": clean_email}, {"$set": {"reset_otp": otp, "reset_otp_exp": exp_time}})
                                 if send_otp_email(clean_email, otp):
                                     st.session_state.reset_step = 1; st.session_state.reset_email = clean_email; st.rerun()
-                        else: st.error("No account found with that email.")
+                        else: st.toast("No account found with that email.", icon="🚨")
+                    else: st.toast("Invalid email format.", icon="🚨")
             elif st.session_state.reset_step == 1:
                 st.markdown('<div style="font-size: 15px; text-align: center; margin-bottom: 30px; color: #ccc;">Enter the 6-digit code sent to your email</div>', unsafe_allow_html=True)
                 st.success(f"OTP sent to {html.escape(st.session_state.reset_email)}")
                 entered_otp = st.text_input("Enter 6-Digit OTP", placeholder="123456", label_visibility="collapsed", key="entered_otp")
                 new_pwd = st.text_input("Enter New Password", type="password", placeholder="New Password", label_visibility="collapsed", key="new_pwd")
                 if st.button("Confirm Reset", type="primary", use_container_width=True):
-                    if len(new_pwd) < 6: st.error("Password must be at least 6 characters.")
+                    if len(new_pwd) < 6: st.toast("Password must be at least 6 characters.", icon="🚨")
                     else:
                         user = users_col.find_one({"email": st.session_state.reset_email})
                         if user and user.get("reset_otp") == str(entered_otp).strip() and time.time() < user.get("reset_otp_exp", 0):
                             users_col.update_many({"email": st.session_state.reset_email}, {"$set": {"password": hash_password(new_pwd), "reset_otp": "", "reset_otp_exp": 0}})
-                            st.success("Password updated!"); time.sleep(1.5)
+                            st.toast("Password updated successfully!", icon="✅"); time.sleep(1.5)
                             st.session_state.reset_step = 0; st.session_state.reset_email = ""
                             st.query_params["view"] = "login"; st.rerun()
-                        else: st.error("Invalid or expired token!")
+                        else: st.toast("Invalid or expired token!", icon="🚨")
             st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span style="color: #aaa;">Remembered your password?</span> <a href="?page=auth&view=login" target="_self" style="color: #0a84ff; text-decoration: none; font-weight: 600;">Log In</a></div>', unsafe_allow_html=True)
 
 # ================= DASHBOARD APP (LOGGED IN) =================
@@ -1365,8 +1285,10 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 .folder-card:hover { transform: scale(1.02); }
 .media-container-wrapper { position: relative; margin-bottom: 15px; cursor: pointer; }
 .media-container-wrapper:hover .square-media { transform: scale(1.02); }
-.square-media { width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: var(--bg-card); border: 1px solid var(--border); }
-.square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Feature 1: CSS Animated Skeleton Loading State */
+.square-media { width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.1); background: linear-gradient(90deg, var(--bg-card) 25%, var(--border) 50%, var(--bg-card) 75%); background-size: 200% 100%; animation: loadingSkeleton 1.5s infinite; border: 1px solid var(--border); }
+@keyframes loadingSkeleton { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; display: block; position: relative; z-index: 2; }
 [data-testid="column"] { position: relative; }
 .folder-options-btn [data-testid="stPopover"] > button { background-color: var(--bg-card) !important; color: var(--text-primary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; height: 38px !important; padding: 0 15px !important; font-weight: 600 !important; box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important; }
 .folder-options-btn [data-testid="stPopover"] > button:hover { background-color: var(--btn-hover) !important; }
@@ -1438,13 +1360,10 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     unscanned_files = list(files_col.find({"username": st.session_state.username, "is_flagged": {"$exists": False}}).limit(15))
     if unscanned_files:
-        with st.spinner("🤖 Auto-scanning legacy media with Automated Hybrid AI..."):
+        with st.spinner("🤖 Auto-scanning legacy media with Automated AI..."):
             for f in unscanned_files:
                 try:
-                    check_url = f["url"]
-                    if f["resource_type"] == "video":
-                        check_url = check_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                        
+                    check_url = f["url"] if f["resource_type"] == "image" else f["url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                     resp = requests.get(check_url, timeout=5)
                     if resp.status_code == 200:
                         safe = is_safe_content(resp.content, safety_model)
@@ -1495,10 +1414,10 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
             safe_url = html.escape(first_media["url"])
             safe_label = html.escape(group["label"])
             
-            thumb_html = f'<img src="{safe_url}">'
+            thumb_html = f'<img src="{safe_url}" loading="lazy">'
             if first_media.get("resource_type") == "video":
                 vid_thumb = safe_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                thumb_html = f'<img src="{vid_thumb}" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'">'
+                thumb_html = f'<img src="{vid_thumb}" loading="lazy" onerror="this.src=\'https://cdn-icons-png.flaticon.com/512/2985/2985655.png\'">'
             
             story_html += f'<a href="{get_nav_link("app", folder="root", story_group=g_idx, story_idx=0)}" target="_self" class="story-link"><div class="story-item"><div class="story-ring" style="background: {c};"><div class="story-inner">{thumb_html}</div></div><div class="story-label">{safe_label}</div></div></a>'
         
@@ -1511,25 +1430,26 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     _, main_col, _ = st.columns([1, 12, 1])
     with main_col:
-        folders = list(folders_col.find({"username": st.session_state.username, "parent_id": actual_folder_id}))
-        files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
-        
+        # Wrap DB calls in spinners for visual feedback on slow connections
+        with st.spinner("Decrypting vault..."):
+            folders = list(folders_col.find({"username": st.session_state.username, "parent_id": actual_folder_id}))
+            files_raw = list(files_col.find({"username": st.session_state.username, "folder_id": actual_folder_id}))
+            
         pinned_files = sorted([f for f in files_raw if f.get("pin_order", 0) > 0], key=lambda x: x.get("pin_order", 0), reverse=True)
         unpinned_files = [f for f in files_raw if not f.get("pin_order", 0) > 0]
         files = pinned_files + unpinned_files
 
         c_title, c_actions = st.columns([10, 2])
         
-        if is_root:
-            c_title.markdown(f'<h2 style="margin:0;">{title_text}</h2>', unsafe_allow_html=True)
-        else:
-            c_title.markdown(f'<div style="display:flex; align-items:center; gap: 15px;"><a href="{home_link}" target="_self" style="text-decoration:none; font-weight: 600; color: var(--accent); font-size: 20px;">←</a><h2 style="margin:0;">{title_text}</h2></div>', unsafe_allow_html=True)
+        if is_root: c_title.markdown(f'<h2 style="margin:0;">{title_text}</h2>', unsafe_allow_html=True)
+        else: c_title.markdown(f'<div style="display:flex; align-items:center; gap: 15px;"><a href="{home_link}" target="_self" style="text-decoration:none; font-weight: 600; color: var(--accent); font-size: 20px;">←</a><h2 style="margin:0;">{title_text}</h2></div>', unsafe_allow_html=True)
         
         with c_actions:
             if is_root:
                 with st.popover("➕ Create Album"):
                     new_folder = st.text_input("New Album", placeholder="Album Name...", label_visibility="collapsed", key=f"folder_input_{st.session_state.folder_key}")
                     if st.button("Create Album", type="primary"):
+                        if not check_rate_limit("create_album", 2): st.stop()
                         clean_folder_name = str(new_folder).strip()
                         if clean_folder_name:
                             folders_col.insert_one({"username": st.session_state.username, "folder_name": clean_folder_name, "parent_id": actual_folder_id, "cover_photo": "", "is_locked": False, "api_key": "", "api_enabled": False})
@@ -1540,18 +1460,14 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     st.markdown("**Album Management**")
                     if st.button("✏️ Rename Album", key=f"edit_{current['_id']}", use_container_width=True): rename_folder_dialog(current["_id"], current["folder_name"])
                     if st.button("🗑 Delete Album", key=f"del_fold_{current['_id']}", use_container_width=True): delete_folder_dialog(current["_id"], current["folder_name"])
-                    
-                    if st.button("🔍 Find & Remove Duplicates", key=f"dup_{current['_id']}", use_container_width=True): 
-                        find_duplicates_dialog(current["_id"])
+                    if st.button("🔍 Find Duplicates", key=f"dup_{current['_id']}", use_container_width=True): find_duplicates_dialog(current["_id"])
                         
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-                    
                     st.markdown("**Developer & API**")
                     if st.button("⚡ Developer API", key=f"api_{current['_id']}", use_container_width=True): developer_api_dialog(current["_id"])
                     
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     st.markdown("**Sharing & Privacy**")
-                    
                     if st.button("🔗 Share Media Batch", key=f"share_folder_{current['_id']}", use_container_width=True):
                         st.query_params["share_folder"] = str(current['_id']); st.rerun()
                         
@@ -1559,28 +1475,26 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     lock_btn_txt = "🔓 Make Public" if is_locked else "🔒 Lock Album"
                     if st.button(lock_btn_txt, key=f"lock_fold_{current['_id']}", use_container_width=True):
                         folders_col.update_one({"_id": current["_id"]}, {"$set": {"is_locked": not is_locked}}); st.rerun()
-                    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     
+                    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
                     st.markdown("**Add Content**")
                     with st.form("upload_content_form", clear_on_submit=True):
                         uploaded_files = st.file_uploader("Upload Media", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}", label_visibility="collapsed")
-                        
                         submit_button = st.form_submit_button("Sync Files", type="primary", use_container_width=True)
+                        
                         if submit_button and uploaded_files:
+                            if not check_rate_limit("upload_action", 5): st.stop()
                             allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm", "video/quicktime"]
                             with st.spinner("Analyzing and Syncing to cloud..."):
                                 for file in uploaded_files:
                                     if file.type not in allowed_types: continue
                                     r_type = "video" if file.type.startswith("video") else "image"
-                                    
                                     file_bytes = file.getvalue()
                                     file.seek(0)
                                     
-                                    # Strict Upload Block logic
                                     if r_type == "image":
-                                        is_safe = is_safe_content(file_bytes, safety_model)
-                                        if not is_safe:
-                                            st.error(f"❌ Upload Blocked: '{html.escape(file.name)}' was identified as sensitive (NSFW) content and is not permitted.")
+                                        if not is_safe_content(file_bytes, safety_model):
+                                            st.toast(f"❌ Blocked: '{html.escape(file.name)}' is flagged as sensitive.", icon="🚨")
                                             continue
                                         
                                     try:
@@ -1589,20 +1503,15 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                         if r_type == "video":
                                             thumb_url = res["secure_url"].replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
                                             thumb_resp = requests.get(thumb_url, timeout=5)
-                                            if thumb_resp.status_code == 200:
-                                                is_safe = is_safe_content(thumb_resp.content, safety_model)
-                                                if not is_safe:
-                                                    cloudinary.uploader.destroy(res["public_id"], resource_type="video")
-                                                    st.error(f"❌ Upload Blocked: Video '{html.escape(file.name)}' was identified as sensitive (NSFW) content and is not permitted.")
-                                                    continue
+                                            if thumb_resp.status_code == 200 and not is_safe_content(thumb_resp.content, safety_model):
+                                                cloudinary.uploader.destroy(res["public_id"], resource_type="video")
+                                                st.toast(f"❌ Blocked: Video '{html.escape(file.name)}' is flagged as sensitive.", icon="🚨")
+                                                continue
 
-                                        # Save to DB (Since it passed, it is safe, so is_flagged = False)
                                         files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "is_flagged": False, "tag": "", "tag_time": 0})
-                                    except Exception as e: 
-                                        st.error(f"Failed to upload {html.escape(file.name)}.")
+                                    except Exception: st.toast(f"Failed to upload {html.escape(file.name)}.", icon="🚨")
                                         
                             st.session_state.uploader_key += 1; st.rerun()
-                            
                 st.markdown('</div>', unsafe_allow_html=True)
         st.write("<br>", unsafe_allow_html=True)
 
@@ -1613,15 +1522,12 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
             f_cols = st.columns(4)
             for i, folder in enumerate(folders):
                 with f_cols[i % 4]:
-                    cover = folder.get("cover_photo")
+                    cover, safe_fname = folder.get("cover_photo"), html.escape(folder['folder_name'])
                     folder_url = get_nav_link("app", folder=str(folder["_id"]))
-                    lock_indicator = '<div style="position:absolute; top:8px; right:8px; font-size:16px; background: rgba(0,0,0,0.5); padding: 4px; border-radius: 50%;">🔒</div>' if folder.get("is_locked") else ""
-                    safe_fname = html.escape(folder['folder_name'])
+                    lock_ind = '<div style="position:absolute; top:8px; right:8px; font-size:16px; background: rgba(0,0,0,0.5); padding: 4px; border-radius: 50%;">🔒</div>' if folder.get("is_locked") else ""
                     
-                    if cover:
-                        html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div class="album-card"><div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid var(--border);">{lock_indicator}<img src="{html.escape(cover)}" style="width: 100%; height: 100%; object-fit: cover;"></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
-                    else:
-                        html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_indicator}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
+                    if cover: html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div class="album-card"><div style="width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border: 1px solid var(--border);">{lock_ind}<img src="{html.escape(cover)}" loading="lazy" style="width: 100%; height: 100%; object-fit: cover;"></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
+                    else: html_str = f'<a href="{folder_url}" target="_self" class="album-link" style="text-decoration: none;"><div style="margin-bottom: 15px;"><div class="folder-card">{lock_ind}<div style="font-size: 40px;">📁</div></div><div style="font-weight: 600; font-size: 15px; color: var(--text-primary); text-align: left; padding-left: 4px; margin-top: 8px;">{safe_fname}</div></div></a>'
                     st.markdown(html_str.replace('\n', ''), unsafe_allow_html=True)
 
         if files:
@@ -1631,28 +1537,23 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                 with img_cols[i % 4]:
                     st.markdown('<div class="media-container-wrapper">', unsafe_allow_html=True)
                     
-                    safe_tag = html.escape(file.get("tag", ""))
+                    safe_tag, pin_badge = html.escape(file.get("tag", "")), '<div style="position:absolute; top:5px; right:5px; font-size:16px; z-index:10; text-shadow: 0 2px 4px rgba(0,0,0,0.5); pointer-events: none;">📌</div>' if file.get("pin_order", 0) > 0 else ""
                     emoji_badge = f'<div style="position:absolute; top:5px; left:5px; font-size:18px; z-index:10; background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(5px); padding: 2px 6px; border-radius: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); pointer-events: none;">{safe_tag}</div>' if safe_tag else ""
-                    pin_badge = '<div style="position:absolute; top:5px; right:5px; font-size:16px; z-index:10; text-shadow: 0 2px 4px rgba(0,0,0,0.5); pointer-events: none;">📌</div>' if file.get("pin_order", 0) > 0 else ""
                     
                     session_token = html.escape(st.query_params.get('session', ''))
                     safe_folder_id = html.escape(str(actual_folder_id) if actual_folder_id else 'root')
                     lb_url = f"?page=app&folder={safe_folder_id}&lightbox_idx={i}&session={session_token}"
-                    safe_url = html.escape(file["url"])
-                    is_flagged = file.get("is_flagged", False)
+                    safe_url, is_flagged = html.escape(file["url"]), file.get("is_flagged", False)
                     
                     media_html = f'<a href="{lb_url}" target="_self" style="text-decoration:none; display: block; position: relative;">'
                     if file["resource_type"] == "image":
-                        if is_flagged:
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
-                        else:
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}"></div>'
+                        if is_flagged: media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" loading="lazy" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
+                        else: media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{safe_url}" loading="lazy"></div>'
                     else:
                         if is_flagged:
                             vid_thumb_preview = safe_url.replace(".mp4", ".jpg").replace(".webm", ".jpg").replace(".mov", ".jpg")
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{vid_thumb_preview}" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
-                        else:
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{vid_thumb_preview}" loading="lazy" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
+                        else: media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
                     media_html += '</a>'
                     
                     st.markdown(media_html.replace('\n', ''), unsafe_allow_html=True)
