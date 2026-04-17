@@ -27,10 +27,10 @@ import tensorflow as tf
 from PIL import Image
 import numpy as np
 
-
-# UI CONFIGURATION & SETUP
-
-st.set_page_config(page_title="voidememo Vault", page_icon="💀", layout="wide", initial_sidebar_state="collapsed")
+# ==========================================
+# 1. UI CONFIGURATION & SETUP
+# ==========================================
+st.set_page_config(page_title="voidememo Vault", page_icon="🌐", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
@@ -47,10 +47,9 @@ st.markdown("""
 EYE_CLOSED_SVG_LARGE = '''<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
 EYE_CLOSED_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5));"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'''
 
-# GLOBAL WALLPAPER GENERATOR
-
+# GLOBAL WALLPAPER GENERATOR (z-index explicitly set to -10 so it never hides menus)
 wallpaper_html = '''
-<div id="vault-wallpaper" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; pointer-events: none;">
+<div id="vault-wallpaper" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; pointer-events: none; z-index: -10;">
     <div class="live-wallpaper-track" style="display: flex; flex-wrap: wrap; width: 150vw; gap: 8px; transform: rotate(-15deg) scale(1.5); animation: scroll-wallpaper 120s linear infinite;">
 '''
 for i in range(60):
@@ -61,9 +60,9 @@ wallpaper_html += '''
 <style>@keyframes scroll-wallpaper { 0% { transform: rotate(-15deg) translateY(0); } 100% { transform: rotate(-15deg) translateY(-50%); } }</style>
 '''
 
-
+# ==========================================
 # 2. PURE DEEP LEARNING AI ENGINE
-
+# ==========================================
 
 @st.cache_resource(show_spinner=False)
 def load_production_ai():
@@ -122,15 +121,15 @@ def is_safe_content(file_bytes, model):
         print(f"Prediction Error: {e}")
         return False
 
-
+# ==========================================
 # 3. DATABASE & CLOUD CONFIGURATION
-
+# ==========================================
 try:
     MONGO_URI = st.secrets["MONGO_URI"]
     client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=5000)
     client.admin.command('ping') 
 except Exception as e:
-    st.error(f"Critical Database Error: Cannot connect to MongoDB. Check your MONGO_URI and ensure your IP is whitelisted in Atlas. Details: {str(e)}")
+    st.error(f"🚨 Critical Database Error: Cannot connect to MongoDB. Check your MONGO_URI and ensure your IP is whitelisted in Atlas. Details: {str(e)}")
     st.stop()
 
 db = client["memory_vault"]
@@ -141,7 +140,6 @@ notifications_col = db["notifications"]
 files_col = db["files"]
 
 # API Optimization: Indexes
-
 try:
     users_col.create_index("email")
     users_col.create_index("session_token")
@@ -157,11 +155,11 @@ try:
         api_secret=st.secrets["CLOUDINARY_API_SECRET"]
     )
 except Exception as e:
-    st.error(f"Cloudinary Config Error: {str(e)}")
+    st.error(f"🚨 Cloudinary Config Error: {str(e)}")
 
-
+# ==========================================
 # 4. HEADLESS API ROUTER
-
+# ==========================================
 api_req_key = st.query_params.get("api_key")
 if api_req_key:
     st.markdown("""
@@ -242,13 +240,13 @@ if api_req_key:
         else:
             st.markdown('<p style="color: white; text-align: center;">Gallery is empty.</p>', unsafe_allow_html=True)
     else:
-        st.toast("Access Denied. Invalid or disabled API Key.", icon="💣")
+        st.toast("Access Denied. Invalid or disabled API Key.", icon="🚨")
         
     st.stop()
 
-
+# ==========================================
 # 5. UTILITIES, VALIDATION & MIDDLEWARE
-
+# ==========================================
 
 def get_optimized_url(url, r_type="image", width=400):
     """Dynamically applies Cloudinary transformations for lightning-fast thumbnail loads."""
@@ -357,15 +355,15 @@ def send_otp_email(receiver_email, otp):
         server.quit()
         return True
     except smtplib.SMTPAuthenticationError:
-        st.toast("Email Auth Failed: Google blocked the login. Ensure you are using a 16-letter Google 'App Password' inside secrets.toml.", icon="🧨")
+        st.toast("Email Auth Failed: Google blocked the login. Ensure you are using a 16-letter Google 'App Password' inside secrets.toml.", icon="🚨")
         return False
     except Exception as e:
-        st.toast(f"Email Sending Failed: {str(e)}", icon="🧨")
+        st.toast(f"Email Sending Failed: {str(e)}", icon="🚨")
         return False
 
-
+# ==========================================
 # 6. ROUTING & STATE MANAGEMENT
-
+# ==========================================
 def get_nav_link(page=None, view=None, tab=None, folder=None, story_group=None, story_idx=None, lightbox_idx=None, profile_hub=None, ai_chat=None, react=None, action=None, file_id=None):
     params = []
     if page is not None: params.append(f"page={page}")
@@ -405,9 +403,9 @@ if not st.session_state.logged_in and "session" in st.query_params:
         st.session_state.logged_in = True
         st.session_state.username = user["username"]
 
-
+# ==========================================
 # 7. PRE-RENDER INTERCEPTORS
-
+# ==========================================
 if st.session_state.logged_in:
     if "action" in st.query_params and "file_id" in st.query_params:
         try:
@@ -468,9 +466,9 @@ if st.session_state.logged_in:
         if "file_id" in st.query_params: del st.query_params["file_id"]
         st.rerun()
 
-
+# ==========================================
 # 8. DETERMINISTIC STORY ENGINE
-
+# ==========================================
 @st.cache_data(ttl=300)
 def generate_cached_stories(username, time_window):
     random.seed(f"{username}_{time_window}") 
@@ -500,11 +498,11 @@ def generate_cached_stories(username, time_window):
             story_groups.append({"label": "Memory Lane", "items": throwback[:6]})
         if favorites:
             random.shuffle(favorites)
-            story_groups.append({"label": "favs", "items": favorites[:6]})
+            story_groups.append({"label": "Previous week's favs ⭐", "items": favorites[:6]})
             
         random_media = all_user_media[:]
         random.shuffle(random_media)
-        story_groups.append({"label": "Your cards", "items": random_media[:6]})
+        story_groups.append({"label": "Discover", "items": random_media[:6]})
             
     return story_groups
 
@@ -512,10 +510,10 @@ if st.session_state.logged_in:
     time_window = int(time.time() / 300) 
     st.session_state.story_groups = generate_cached_stories(st.session_state.username, time_window)
 
-
+# ==========================================
 # 9. DIALOGS & OVERLAYS
-
-@st.dialog("Set Album PIN")
+# ==========================================
+@st.dialog("🔒 Set Album PIN")
 def set_album_pin_dialog(folder_id):
     st.write("Set a secure PIN. Anyone accessing this album will need to enter it.")
     pin = st.text_input("New PIN", type="password")
@@ -527,7 +525,7 @@ def set_album_pin_dialog(folder_id):
             time.sleep(1)
             st.rerun()
         elif pin != confirm:
-            st.toast("PINs do not match.", icon="👻")
+            st.toast("PINs do not match.", icon="🚨")
 
 @st.dialog("🔓 Remove Album Lock")
 def remove_album_pin_dialog(folder_id, correct_hash):
@@ -540,9 +538,9 @@ def remove_album_pin_dialog(folder_id, correct_hash):
             time.sleep(1)
             st.rerun()
         else:
-            st.toast("Incorrect PIN.", icon="👹")
+            st.toast("Incorrect PIN.", icon="🚨")
 
-@st.dialog("Recover Album PIN")
+@st.dialog("🔑 Recover Album PIN")
 def recover_album_pin_dialog(folder_id, user_email):
     st.write("We will send a secure 6-digit code to your registered email to remove the album lock.")
     if "album_otp_sent" not in st.session_state: 
@@ -570,17 +568,17 @@ def recover_album_pin_dialog(folder_id, user_email):
                 if str(folder_id) not in st.session_state.unlocked_albums:
                     st.session_state.unlocked_albums.append(str(folder_id))
                     
-                st.toast("Album successfully unlocked and PIN removed!")
+                st.toast("Album successfully unlocked and PIN removed!", icon="✅")
                 st.session_state.album_otp_sent = False
                 time.sleep(1.5)
                 st.rerun()
             else:
-                st.toast("Invalid or expired code.")
+                st.toast("Invalid or expired code.", icon="🚨")
         if c2.button("Cancel", use_container_width=True):
             st.session_state.album_otp_sent = False
             st.rerun()
 
-@st.dialog("API Key")
+@st.dialog("⚡ Developer API Access")
 def developer_api_dialog(folder_id_str):
     fid = ObjectId(folder_id_str)
     folder = folders_col.find_one({"_id": fid})
@@ -597,7 +595,7 @@ def developer_api_dialog(folder_id_str):
             folders_col.update_one({"_id": fid}, {"$set": {"api_key": new_key, "api_enabled": True}})
             st.rerun()
     else:
-        st.success("API is Currently Active" if has_api else " API is Currently Paused")
+        st.success("✅ API is Currently Active" if has_api else "⏸️ API is Currently Paused")
         endpoint_url = f"https://voidmemo.streamlit.app/?embed=true&api_key={api_key}" 
         st.text_input("Your Secret API Endpoint URL:", value=endpoint_url, disabled=True)
         
@@ -640,7 +638,7 @@ def delete_file_dialog(file_id, public_id, resource_type):
         st.rerun()
     if c2.button("No, Cancel", use_container_width=True): st.rerun()
 
-@st.dialog("✏️")
+@st.dialog("✏️ Rename Album")
 def rename_folder_dialog(folder_id, current_name):
     new_name = st.text_input("Enter new album name:", value=current_name)
     c1, c2 = st.columns(2)
@@ -651,13 +649,13 @@ def rename_folder_dialog(folder_id, current_name):
         st.rerun()
     if c2.button("Cancel", use_container_width=True): st.rerun()
 
-@st.dialog("📂")
+@st.dialog("📂 Move Media")
 def move_media_dialog(file_id_str):
     try:
         fid = ObjectId(file_id_str)
         file = files_col.find_one({"_id": fid})
         if not file:
-            st.toast("File not found")
+            st.toast("File not found", icon="🚨")
             if st.button("Close"): st.rerun()
             return
     except Exception:
@@ -679,7 +677,7 @@ def move_media_dialog(file_id_str):
         st.session_state.pending_move = None
         st.rerun()
 
-@st.dialog("🔍")
+@st.dialog("🔍 Find & Remove Duplicates")
 def find_duplicates_dialog(folder_id):
     st.write("This tool will scan the current album for exact duplicate images. It will keep one original and permanently delete the rest.")
     if st.button("Start Scan", type="primary", use_container_width=True):
@@ -744,11 +742,11 @@ def render_share_media_overlay(target_data, mode):
             file_doc = files_col.find_one({"_id": selected_media_ids[0]})
             if file_doc: st.write(f"Sharing: **{html.escape(file_doc.get('filename', 'Media Item'))}**")
     except InvalidId:
-        st.toast("Invalid media reference.")
+        st.toast("Invalid media reference.", icon="🚨")
         st.stop()
 
     st.markdown("### 2. Discover Users")
-    tab_n, tab_s = st.tabs(["Nearby Users", "🔍"])
+    tab_n, tab_s = st.tabs(["📍 Nearby Users", "🔍 Search Global"])
     selected_users = []
     
     with tab_n:
@@ -778,7 +776,7 @@ def render_share_media_overlay(target_data, mode):
             })
             msg_text = f"shared a memory with you." if len(selected_media_ids) == 1 else f"shared a {len(selected_media_ids)} memory batch with you."
             notifications_col.insert_one({"username": u, "sender": st.session_state.username, "type": "share", "share_id": share_res.inserted_id, "message": msg_text, "is_read": False, "created_at": time.time()})
-        st.toast("Shared successfully!")
+        st.toast("Shared successfully!", icon="✅")
         time.sleep(1)
         if "share_folder" in st.query_params: del st.query_params["share_folder"]
         st.session_state.pending_share = None
@@ -831,7 +829,7 @@ def render_preview_shared_overlay(notif_id_str):
     share = shares_col.find_one({"_id": notif.get("share_id")})
     media_ids = share.get("media_ids", []) if share else []
     if not media_ids:
-        st.toast("Shared media no longer exists.")
+        st.toast("Shared media no longer exists.", icon="🚨")
         st.stop()
 
     st.markdown(f"**From:** {html.escape(notif['sender'])} | **Includes:** {share['count']} memory copies.")
@@ -857,17 +855,17 @@ def render_preview_shared_overlay(notif_id_str):
     
     with st.popover("➕ Add Reaction"):
         e_cols = st.columns(4)
-        for e_idx, em in enumerate(["🥰", "❤️", "🔥", "😂", "👍", "🎉", "", "🥺"]):
+        for e_idx, em in enumerate(["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]):
             if e_cols[e_idx % 4].button(em, key=f"sreact_{em}", use_container_width=True):
                 notifications_col.insert_one({"username": notif['sender'], "sender": st.session_state.username, "type": "share_reaction", "share_id": notif.get("share_id"), "message": f"reacted {em} to your shared memory.", "is_read": False, "created_at": time.time()})
-                st.toast(f"Sent {em} to {html.escape(notif['sender'])}!")
+                st.toast(f"Sent {em} to {html.escape(notif['sender'])}!", icon="✅")
                 time.sleep(1)
                 if "preview_notif" in st.query_params: del st.query_params["preview_notif"]
                 st.rerun()
 
     st.write("<br>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
-    if c1.button(f"Save {share['count']} items to Album", type="primary", use_container_width=True):
+    if c1.button(f"📥 Save {share['count']} items to Album", type="primary", use_container_width=True):
         root = folders_col.find_one({"username": st.session_state.username, "parent_id": None})
         root_id = root["_id"] if root else None
         
@@ -884,7 +882,7 @@ def render_preview_shared_overlay(notif_id_str):
 
         notifications_col.update_one({"_id": notif_oid}, {"$set": {"is_read": True}})
         shares_col.update_one({"_id": share["_id"]}, {"$set": {"is_seen": True}})
-        st.toast("Saved to Shared Media album!")
+        st.toast("Saved to Shared Media album!", icon="✅")
         time.sleep(1)
         if "preview_notif" in st.query_params: del st.query_params["preview_notif"]
         st.rerun()
@@ -907,7 +905,7 @@ def render_profile_hub_overlay():
         if "profile_hub" in st.query_params: del st.query_params["profile_hub"]
         st.rerun()
 
-    p_tab1, p_tab2, p_tab3 = st.tabs(["Settings", "Notifications", "Switch Profiles"])
+    p_tab1, p_tab2, p_tab3 = st.tabs(["⚙️ Settings", "🔔 Notifications", "👥 Switch Profiles"])
     
     with p_tab1:
         c1, c2 = st.columns([1.5, 1], gap="large")
@@ -928,25 +926,25 @@ def render_profile_hub_overlay():
                     
                 clean_username = html.escape(str(new_username).strip())
                 if clean_username != st.session_state.username:
-                    if users_col.find_one({"username": clean_username}): st.toast("Username already taken.")
+                    if users_col.find_one({"username": clean_username}): st.toast("Username already taken.", icon="🚨")
                     else:
                         updates["username"] = clean_username
                         users_col.update_one({"username": st.session_state.username}, {"$set": updates})
                         folders_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
                         files_col.update_many({"username": st.session_state.username}, {"$set": {"username": clean_username}})
                         st.session_state.username = clean_username
-                        st.toast("Profile Updated!")
+                        st.toast("Profile Updated!", icon="✅")
                         time.sleep(1); st.rerun()
                 else:
                     users_col.update_one({"username": st.session_state.username}, {"$set": updates})
-                    st.toast("Profile Updated!")
+                    st.toast("Profile Updated!", icon="✅")
                     time.sleep(1); st.rerun()
             
             st.markdown("<hr>", unsafe_allow_html=True)
-            st.markdown("### Fix Content Filtering")
+            st.markdown("### 🛠️ Fix Content Filtering")
             st.info("If your safe photos were previously blurred, click here to rescan and unblur them.")
             
-            if st.button("Force Deep Scan for Sensitive Content", use_container_width=True):
+            if st.button("🔍 Force Deep Scan for Sensitive Content", use_container_width=True):
                 if not check_rate_limit("deep_scan", 30): st.stop()
                 with st.spinner("Analyzing all media with the Production AI Engine..."):
                     updated_count = 0
@@ -962,7 +960,7 @@ def render_profile_hub_overlay():
                                 files_col.update_one({"_id": f["_id"]}, {"$set": {"is_flagged": not safe}})
                                 updated_count += 1
                         except Exception: pass
-                    st.toast(f"Deep scan complete! Re-evaluated {updated_count} files.")
+                    st.toast(f"Deep scan complete! Re-evaluated {updated_count} files.", icon="✅")
 
         with c2:
             st.markdown("### Reaction Analytics")
@@ -974,7 +972,7 @@ def render_profile_hub_overlay():
             else: st.info("You haven't reacted to any memories yet!")
                 
             st.markdown("<hr style='margin: 30px 0;'>", unsafe_allow_html=True)
-            if st.button("Logout", use_container_width=True):
+            if st.button("🚪 Logout Complete Session", use_container_width=True):
                 users_col.update_one({"username": st.session_state.username}, {"$set": {"session_token": ""}})
                 st.session_state.logged_in = False; st.session_state.username = ""
                 st.query_params.clear(); st.rerun()
@@ -992,9 +990,9 @@ def render_profile_hub_overlay():
 
         st.markdown("### Your Notifications")
         ca, cb = st.columns(2)
-        if ca.button("Mark All Read", use_container_width=True):
+        if ca.button("✔️ Mark All Read", use_container_width=True):
             st.query_params["confirm_all_read"] = "true"; st.rerun()
-        if cb.button("🗑️", use_container_width=True):
+        if cb.button("🗑️ Clear All", use_container_width=True):
             st.query_params["confirm_clear_all"] = "true"; st.rerun()
             
         st.markdown("<hr style='margin: 15px 0; border-color: var(--border);'>", unsafe_allow_html=True)
@@ -1026,7 +1024,7 @@ def render_profile_hub_overlay():
         for sib in siblings:
             if sib["username"] == st.session_state.username: st.success(f"👤 {html.escape(sib['username'])} (Active)")
             else:
-                if st.button(f"Switch to {html.escape(sib['username'])}", key=f"sw_{sib['_id']}", use_container_width=True):
+                if st.button(f"🔄 Switch to {html.escape(sib['username'])}", key=f"sw_{sib['_id']}", use_container_width=True):
                     token = str(uuid.uuid4())
                     users_col.update_one({"username": sib["username"]}, {"$set": {"session_token": token}})
                     st.session_state.username = sib["username"]
@@ -1090,12 +1088,9 @@ def render_ai_chat_overlay():
     st.stop()
 
 
-# FULL-SCREEN LIGHTBOX & STORY RENDERERS 
-
+# --- FULL-SCREEN LIGHTBOX & STORY RENDERERS ---
 def render_lightbox_fullscreen(idx, folder_id_str):
     f_id = None if folder_id_str == "root" else ObjectId(folder_id_str)
-    
-    # Feature 7 Bugfix : Verifies security access before opening lightbox
     
     if f_id:
         folder = folders_col.find_one({"_id": f_id})
@@ -1126,9 +1121,6 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     prev_search = f"?page=app&folder={safe_folder_id}&lightbox_idx={idx - 1}&session={session_token}"
     close_search = f"?page=app&folder={safe_folder_id}&session={session_token}"
     
-    # Feature 6 Integration: Media renders without blur in full screen
-    # Use standard safe_url for Lightbox to keep full resolution
-    
     safe_url = html.escape(file['url'])
 
     media_element = f"<img id='lb-media' src='{safe_url}' style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); pointer-events: none; transition: filter 0.3s, transform 0.3s;'>" if file['resource_type'] == "image" else f"<video src='{safe_url}' controls autoplay loop playsinline style='max-width: 85vw; max-height: 85vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.6);'></video>"
@@ -1140,12 +1132,12 @@ def render_lightbox_fullscreen(idx, folder_id_str):
     <div class="lightbox-menu">
         <div class="lightbox-menu-btn">⋮ Options</div>
         <div class="lightbox-menu-content">
-            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="share", file_id=fid)}" target="_self">Share</a>
-            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="pin", file_id=fid)}" target="_self">📌</a>
-            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="cover", file_id=fid)}" target="_self">Set Cover</a>
-            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="move", file_id=fid)}" target="_self">📂</a>
+            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="share", file_id=fid)}" target="_self">🔗 Share</a>
+            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="pin", file_id=fid)}" target="_self">📌 Pin</a>
+            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="cover", file_id=fid)}" target="_self">🖼️ Set Cover</a>
+            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="move", file_id=fid)}" target="_self">📂 Move</a>
             <a href="{safe_url}" target="_blank" download>⬇️ Download</a>
-            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="confirm_delete", file_id=fid)}" target="_self" style="color: #ff3b30;">🗑️</a>
+            <a href="{get_nav_link(page="app", folder=safe_folder_id, action="confirm_delete", file_id=fid)}" target="_self" style="color: #ff3b30;">🗑️ Delete</a>
         </div>
     </div>
     '''
@@ -1157,7 +1149,7 @@ def render_lightbox_fullscreen(idx, folder_id_str):
         react_html = f'<div class="lightbox-react-menu"><a href="{get_nav_link(page="app", folder=safe_folder_id, action="locked_react", file_id=fid)}" target="_self" class="lightbox-menu-btn" style="text-decoration:none; width:auto; padding: 0 15px;">🔒 Locked</a></div>'
     else:
         emojis = ["🥰", "❤️", "🔥", "😂", "👍", "🎉", "✨", "🥺"]
-        react_html = '<div class="lightbox-react-menu"><div class="lightbox-menu-btn">➕</div><div class="lightbox-react-content">'
+        react_html = '<div class="lightbox-react-menu"><div class="lightbox-menu-btn">➕ React</div><div class="lightbox-react-content">'
         for em in emojis:
             r_link = get_nav_link(page="app", folder=safe_folder_id, lightbox_idx=idx, react=em, file_id=fid)
             react_html += f'<a href="{r_link}" target="_self">{em}</a>'
@@ -1266,7 +1258,6 @@ def render_story_fullscreen(group_idx, story_idx):
 
 
 # ================= PUBLIC ROUTING (LOGGED OUT) =================
-
 if not st.session_state.logged_in:
     
     if app_page not in ["landing", "policy", "contact", "auth"]:
@@ -1369,18 +1360,18 @@ div[data-testid="stAppViewBlockContainer"]::before {
             if st.session_state.login_step == 0:
                 email = st.text_input("Email", placeholder="Email", label_visibility="collapsed", key="l_email")
                 pwd = st.text_input("Password", type="password", placeholder="Password", label_visibility="collapsed", key="l_pwd")
-                is_human = st.checkbox("I am human (Not a robot)", key="l_human")
+                is_human = st.checkbox("☑️ I am human (Not a robot)", key="l_human")
                 
                 st.markdown(f'<div style="text-align: right; margin-top: -10px; margin-bottom: 15px;"><a href="?page=auth&view=forgot" target="_self" style="color: #aaa; font-size: 13px; text-decoration: none; font-weight: 500;">Forgot Password?</a></div>', unsafe_allow_html=True)
                 
                 if st.button("Request OTP to Login", type="primary", use_container_width=True):
                     if not check_rate_limit("auth_action", 4): st.stop()
                     if not is_human:
-                        st.toast("Please confirm you are human to proceed.")
+                        st.toast("Please confirm you are human to proceed.", icon="🚨")
                     elif not email or not pwd:
-                        st.toast("Please enter email and password.")
+                        st.toast("Please enter email and password.", icon="🚨")
                     elif not validate_email(email):
-                        st.toast("Invalid email format.")
+                        st.toast("Invalid email format.", icon="🚨")
                     else:
                         user = users_col.find_one({"email": email.strip().lower(), "password": hash_password(pwd)})
                         if user:
@@ -1392,7 +1383,7 @@ div[data-testid="stAppViewBlockContainer"]::before {
                                     st.session_state.login_step = 1
                                     st.rerun()
                         else:
-                            st.toast("Invalid credentials.")
+                            st.toast("Invalid credentials.", icon="🚨")
                             
                 st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span style="color: #aaa;">New to our platform?</span> <a href="?page=auth&view=signup" target="_self" style="color: #0a84ff; text-decoration: none; font-weight: 600;">Sign Up</a></div>', unsafe_allow_html=True)
                 
@@ -1417,7 +1408,7 @@ div[data-testid="stAppViewBlockContainer"]::before {
                         if "view" in st.query_params: del st.query_params["view"]
                         st.rerun()
                     else:
-                        st.toast("Invalid or expired OTP.")
+                        st.toast("Invalid or expired OTP.", icon="🚨")
                 if c2.button("Cancel", use_container_width=True):
                     st.session_state.login_step = 0
                     st.rerun()
@@ -1436,17 +1427,17 @@ div[data-testid="stAppViewBlockContainer"]::before {
             if st.button("Sign Up", type="primary", use_container_width=True):
                 if not check_rate_limit("auth_action", 4): st.stop()
                 if not s_agree:
-                    st.toast("You must agree to the Privacy Policy to create a vault.")
+                    st.toast("You must agree to the Privacy Policy to create a vault.", icon="🚨")
                 elif not s_email or not s_pwd or not fname or not pin_code: 
-                    st.toast("Please fill all core required fields.")
+                    st.toast("Please fill all core required fields.", icon="🚨")
                 elif not validate_email(s_email):
-                    st.toast("Invalid email format.")
+                    st.toast("Invalid email format.", icon="🚨")
                 elif len(s_pwd) < 6:
-                    st.toast("Password must be at least 6 characters.")
+                    st.toast("Password must be at least 6 characters.", icon="🚨")
                 else:
                     result = register(s_email, s_pwd, fname, lname, bday, pin_code, s_phone)
-                    if result == "MAX_ACCOUNTS": st.toast("Maximum of 5 profiles allowed per email address.")
-                    elif result == "PHONE_REQUIRED": st.toast("Phone number is required when creating multiple accounts with the same email.")
+                    if result == "MAX_ACCOUNTS": st.toast("Maximum of 5 profiles allowed per email address.", icon="🚨")
+                    elif result == "PHONE_REQUIRED": st.toast("Phone number is required when creating multiple accounts with the same email.", icon="🚨")
                     elif result:
                         token = str(uuid.uuid4())
                         users_col.update_one({"username": result}, {"$set": {"session_token": token}})
@@ -1473,31 +1464,29 @@ div[data-testid="stAppViewBlockContainer"]::before {
                                 users_col.update_many({"email": clean_email}, {"$set": {"reset_otp": otp, "reset_otp_exp": exp_time}})
                                 if send_otp_email(clean_email, otp):
                                     st.session_state.reset_step = 1; st.session_state.reset_email = clean_email; st.rerun()
-                        else: st.toast("No account found with that email.")
-                    else: st.toast("Invalid email format.")
+                        else: st.toast("No account found with that email.", icon="🚨")
+                    else: st.toast("Invalid email format.", icon="🚨")
             elif st.session_state.reset_step == 1:
                 st.markdown('<div style="font-size: 15px; text-align: center; margin-bottom: 30px; color: #ccc;">Enter the 6-digit code sent to your email</div>', unsafe_allow_html=True)
                 st.success(f"OTP sent to {html.escape(st.session_state.reset_email)}")
                 entered_otp = st.text_input("Enter 6-Digit OTP", placeholder="123456", label_visibility="collapsed", key="entered_otp")
                 new_pwd = st.text_input("Enter New Password", type="password", placeholder="New Password", label_visibility="collapsed", key="new_pwd")
                 if st.button("Confirm Reset", type="primary", use_container_width=True):
-                    if len(new_pwd) < 6: st.toast("Password must be at least 6 characters.")
+                    if len(new_pwd) < 6: st.toast("Password must be at least 6 characters.", icon="🚨")
                     else:
                         user = users_col.find_one({"email": st.session_state.reset_email})
                         if user and user.get("reset_otp") == str(entered_otp).strip() and time.time() < user.get("reset_otp_exp", 0):
                             users_col.update_many({"email": st.session_state.reset_email}, {"$set": {"password": hash_password(new_pwd), "reset_otp": "", "reset_otp_exp": 0}})
-                            st.toast("Password updated successfully!"); time.sleep(1.5)
+                            st.toast("Password updated successfully!", icon="✅"); time.sleep(1.5)
                             st.session_state.reset_step = 0; st.session_state.reset_email = ""
                             st.query_params["view"] = "login"; st.rerun()
-                        else: st.toast("Invalid or expired token!")
+                        else: st.toast("Invalid or expired token!", icon="🚨")
             st.markdown(f'<div style="text-align: center; margin-top: 25px;"><span style="color: #aaa;">Remembered your password?</span> <a href="?page=auth&view=login" target="_self" style="color: #0a84ff; text-decoration: none; font-weight: 600;">Log In</a></div>', unsafe_allow_html=True)
 
 # ================= DASHBOARD APP (LOGGED IN) =================
-
 else:
     # Feature 8 Update: Display Live Wallpaper behind the main dashboard
-    
-    st.markdown(wallpaper_html.replace('z-index: 0;', 'z-index: -10;'), unsafe_allow_html=True)
+    st.markdown(wallpaper_html, unsafe_allow_html=True)
     
     def inject_dashboard_css():
         dash_css = """<style>
@@ -1506,10 +1495,15 @@ else:
 .stApp, [data-testid="stAppViewContainer"] { background-color: transparent !important; color: var(--text-primary) !important; }
 p, h1, h2, h3, h4, h5, h6, span, label, li { color: var(--text-primary) !important; transition: color 0.3s ease; }
 
-div[data-testid="stAppViewBlockContainer"] { 
-    max-width: 100vw !important; padding: 20px 5% 80px 5% !important; margin: 0 !important; background: transparent !important; border: none !important; box-shadow: none !important; backdrop-filter: none !important;
+/* Fix z-index for UI elements so wallpaper doesn't block them */
+[data-testid="stAppViewBlockContainer"] { 
+    max-width: 100vw !important; padding: 20px 5% 80px 5% !important; margin: 0 !important; background: transparent !important; border: none !important; box-shadow: none !important; backdrop-filter: none !important; z-index: 10 !important; position: relative;
 }
-div[data-testid="stAppViewBlockContainer"]::before { display: none !important; content: none !important; }
+[data-testid="stAppViewBlockContainer"]::before { display: none !important; content: none !important; }
+
+/* Force popover dropdown to render above EVERYTHING */
+[data-testid="stPopover"] { position: relative; z-index: 99999 !important; }
+div[data-testid="stPopoverBody"] { z-index: 999999 !important; }
 
 .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; position: relative; z-index: 9999999 !important; pointer-events: auto !important; margin-bottom: 20px; }
 .brand-logo { font-size: 24px; font-weight: 800; color: var(--accent) !important; letter-spacing: 0.5px; text-decoration: none; position:relative; z-index:100; }
@@ -1520,8 +1514,11 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 .story-item { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 85px; cursor: pointer; transition: transform 0.2s; }
 .story-item:hover { transform: scale(1.05); }
 .story-ring { width: 76px; height: 76px; border-radius: 50%; padding: 3px; display: flex; align-items: center; justify-content: center; }
+
+/* Perfect circle cropping for stories */
 .story-inner { width: 100%; height: 100%; border-radius: 50%; border: 3px solid #1a1a1a; overflow: hidden; background: var(--bg-card); display: flex; align-items: center; justify-content: center; font-size: 24px; }
-.story-inner img, .story-inner video { width: 100%; height: 100%; object-fit: cover; }
+.story-inner img, .story-inner video { width: 100% !important; height: 100% !important; object-fit: cover !important; border-radius: 50% !important; }
+
 .story-label { font-size: 12px; font-weight: 600; color: var(--text-primary); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80px;}
 .album-link { text-decoration: none; display: block; }
 .album-card { margin-bottom: 15px; transition: transform 0.2s ease; position: relative; }
@@ -1531,22 +1528,25 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 .media-container-wrapper { position: relative; margin-bottom: 15px; cursor: pointer; }
 .media-container-wrapper:hover .square-media { transform: scale(1.02); }
 
-/* Feature 1: CSS Animated Skeleton Loading State */
+/* Feature 1: CSS Animated Skeleton Loading State + Perfect Circle Cropping */
 .square-media { 
-    width: 100%; aspect-ratio: 1/1; overflow: hidden; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.3); 
+    width: 100%; aspect-ratio: 1/1; overflow: hidden !important; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.3); 
     background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.05) 75%); 
     background-size: 200% 100%; animation: loadingSkeleton 1.5s infinite; border: 1px solid var(--border); 
+    display: flex; justify-content: center; align-items: center;
 }
 @keyframes loadingSkeleton { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-.square-media img, .square-media video { width: 100%; height: 100%; object-fit: cover; display: block; position: relative; z-index: 2; }
+.square-media img, .square-media video { width: 100% !important; height: 100% !important; object-fit: cover !important; border-radius: 50% !important; display: block; position: relative; z-index: 2; }
 
-[data-testid="column"] { position: relative; }
+[data-testid="column"] { position: relative; z-index: 10; }
 [data-testid="stPopover"] > button { background-color: var(--bg-card) !important; color: var(--text-primary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; height: 38px !important; padding: 0 15px !important; font-weight: 600 !important; box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important; }
 [data-testid="stPopover"] > button:hover { background-color: var(--btn-hover) !important; }
 [data-testid="stFileUploader"] > div { background-color: var(--bg-card) !important; border: 1px dashed var(--border) !important; border-radius: 16px !important; padding: 20px !important; }
+
 .profile-header-widget { display: inline-flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.5); backdrop-filter: blur(10px); padding: 6px 12px; border-radius: 50px; transition: transform 0.2s; cursor: pointer; color: var(--text-primary) !important; border: 1px solid var(--border); position: relative; text-decoration: none; }
 .profile-header-widget:hover { transform: scale(1.02); text-decoration: none; }
-.profile-header-widget img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+/* Perfect circle profile picture crop */
+.profile-header-widget img { width: 36px !important; height: 36px !important; border-radius: 50% !important; object-fit: cover !important; }
 .profile-header-widget span { font-weight: 600; font-size: 15px;}
 .profile-notif-dot { position: absolute; top: 2px; right: 8px; width: 11px; height: 11px; background-color: #ff3b30; border-radius: 50%; border: 1.5px solid #000; box-shadow: 0 0 5px rgba(255, 59, 48, 0.5); z-index: 20; }
 .custom-footer { margin-top: 50px; width: 100%; text-align: center; padding: 20px 0; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; clear: both; }
@@ -1557,7 +1557,6 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
     inject_dashboard_css()
     
     # Feature 2 Clean UX: Render any pending toasts instead of a dialog
-    
     if st.session_state.get("pending_toast"):
         st.toast(st.session_state.pending_toast, icon="⏳")
         st.session_state.pending_toast = None
@@ -1654,7 +1653,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     # Silent AI logging to ensure clean UI
     if safety_model is None:
-        st.error(f"Manager Engine is {model_status}. Uploads are strictly blocked until the AI is restored.")
+        st.error(f"🚨 Manager Engine is {model_status}. Uploads are strictly blocked until the AI is restored.")
     
     if is_root and st.session_state.story_groups:
         st.markdown(f'<h3 style="margin-left: 40px; margin-bottom: 10px;">Stories</h3>', unsafe_allow_html=True)
@@ -1683,9 +1682,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
     _, main_col, _ = st.columns([1, 12, 1])
     with main_col:
-        
         # Feature 7 & 9: PIN Protected Folder View + Recovery Flow Clean UI Restructure
-        
         if not is_root and current.get("is_locked"):
             f_id_str = str(current["_id"])
             if f_id_str not in st.session_state.unlocked_albums:
@@ -1704,7 +1701,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                         if hash_password(pin_attempt) == current.get("lock_pin", ""):
                             st.session_state.unlocked_albums.append(f_id_str)
                             st.rerun()
-                        else: st.toast("Incorrect PIN.")
+                        else: st.toast("Incorrect PIN.", icon="🚨")
                     
                     st.write("<br>", unsafe_allow_html=True)
                     if st.button("Forgot PIN? Recover via Email", use_container_width=True):
@@ -1730,7 +1727,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
         
         with c_actions:
             if is_root:
-                with st.popover("➕"):
+                with st.popover("➕ Create Album"):
                     new_folder = st.text_input("New Album", placeholder="Album Name...", label_visibility="collapsed", key=f"folder_input_{st.session_state.folder_key}")
                     if st.button("Create Album", type="primary"):
                         if not check_rate_limit("create_album", 2): st.stop()
@@ -1741,8 +1738,8 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
             else:
                 with st.popover("⋮ Options", use_container_width=True):
                     st.markdown("**Album Management**")
-                    if st.button("✏️", key=f"edit_{current['_id']}", use_container_width=True): rename_folder_dialog(current["_id"], current["folder_name"])
-                    if st.button("🗑", key=f"del_fold_{current['_id']}", use_container_width=True): delete_folder_dialog(current["_id"], current["folder_name"])
+                    if st.button("✏️ Rename Album", key=f"edit_{current['_id']}", use_container_width=True): rename_folder_dialog(current["_id"], current["folder_name"])
+                    if st.button("🗑 Delete Album", key=f"del_fold_{current['_id']}", use_container_width=True): delete_folder_dialog(current["_id"], current["folder_name"])
                     
                     if st.button("🔍 Find & Remove Duplicates", key=f"dup_{current['_id']}", use_container_width=True): 
                         find_duplicates_dialog(current["_id"])
@@ -1786,7 +1783,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                                         is_safe = is_safe_content(file_bytes, safety_model)
                                         if not is_safe:
                                             is_flagged = True
-                                            st.toast(f"⚠️ '{html.escape(file.name)}' flagged as sensitive. Blurring applied.", icon="☠︎")
+                                            st.toast(f"⚠️ '{html.escape(file.name)}' flagged as sensitive. Blurring applied.", icon="🙈")
                                         
                                     try:
                                         file.seek(0)
@@ -1803,7 +1800,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
 
                                         files_col.insert_one({"username": st.session_state.username, "folder_id": current["_id"], "filename": html.escape(file.name), "url": res["secure_url"], "public_id": res["public_id"], "resource_type": r_type, "is_flagged": is_flagged, "tag": "", "tag_time": 0})
                                     except Exception as e: 
-                                        st.toast(f"Failed to upload {html.escape(file.name)}.")
+                                        st.toast(f"Failed to upload {html.escape(file.name)}.", icon="🚨")
                                         
                             st.session_state.uploader_key += 1; st.rerun()
 
@@ -1844,9 +1841,7 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     lb_url = f"?page=app&folder={safe_folder_id}&lightbox_idx={i}&session={session_token}"
                     
                     safe_url = html.escape(file["url"])
-                    
                     # Use dynamically optimized URLs here for huge performance gains
-                    
                     opt_url = get_optimized_url(safe_url, r_type=file["resource_type"], width=400)
                     
                     is_flagged = file.get("is_flagged", False)
@@ -1854,12 +1849,12 @@ div[data-testid="stAppViewBlockContainer"]::before { display: none !important; c
                     
                     if file["resource_type"] == "image":
                         if is_flagged:
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{opt_url}" loading="lazy" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">☠︎</div></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{opt_url}" loading="lazy" style="filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{opt_url}" loading="lazy"></div>'
                     else:
                         if is_flagged:
-                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{opt_url}" loading="lazy" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">☠︎</div></div>'
+                            media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<img src="{opt_url}" loading="lazy" style="width: 100%; height: 100%; object-fit: cover; filter: blur(25px); transform: scale(1.1);"><div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; z-index:20; text-shadow: 0 2px 4px rgba(0,0,0,0.5);">🙈</div></div>'
                         else:
                             media_html += f'<div class="square-media" style="position:relative;">{emoji_badge}{pin_badge}<video src="{safe_url}" autoplay loop muted playsinline style="width: 100%; height: 100%; object-fit: cover;"></video><div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:5;"></div></div>'
                     media_html += '</a>'
