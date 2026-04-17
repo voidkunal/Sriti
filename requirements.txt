@@ -5,6 +5,5 @@ certifi
 plotly
 requests
 tensorflow==2.15.0
-new_custom_nsfw_model.keras
 Pillow>=9.0.0
 numpy<2.0.0
