@@ -72,25 +72,33 @@ def load_production_ai():
     except Exception:
         pass
 
+    # The AI Patch: Intercept and fix Keras 3 'batch_shape' compatibility errors
+    class SafeInputLayer(keras.layers.InputLayer):
+        def __init__(self, **kwargs):
+            if 'batch_shape' in kwargs:
+                # Translate Keras 2 terminology to Keras 3
+                kwargs['batch_input_shape'] = kwargs.pop('batch_shape')
+            super().__init__(**kwargs)
+
+    class SafeDiv(keras.layers.Layer):
+        def call(self, x): return x / 127.5
+        
+    class SafeDummy(keras.layers.Layer):
+        def call(self, x): return x
+
+    # Inject the patched layers into the loading process
+    custom_objs = {
+        "InputLayer": SafeInputLayer,
+        "TrueDivide": SafeDiv, 
+        "TFOpLambda": SafeDummy
+    }
+
     try:
-        model = keras.models.load_model(model_path, compile=False)
+        with keras.utils.custom_object_scope(custom_objs):
+            model = keras.models.load_model(model_path, compile=False)
         return model, "ONLINE (Deep Learning AI)"
     except Exception as e:
         err_msg = str(e)
-        if "127.5" in err_msg or "TrueDivide" in err_msg:
-            try:
-                class SafeDiv(keras.layers.Layer):
-                    def call(self, x): return x / 127.5
-                class SafeDummy(keras.layers.Layer):
-                    def call(self, x): return x
-                custom_objs = {"TrueDivide": SafeDiv, "TFOpLambda": SafeDummy}
-                with keras.utils.custom_object_scope(custom_objs):
-                    model = keras.models.load_model(model_path, compile=False)
-                return model, "ONLINE (Deep Learning AI - Patched)"
-            except Exception as e2:
-                return None, f"ONLINE (Math Heuristic Mode - Loading Error: {str(e2)})"
-        
-        # Now it will actually output what TensorFlow is crying about on the dashboard
         return None, f"ONLINE (Math Heuristic Mode - Error: {err_msg})"
 
 # Guaranteed Global Variables
