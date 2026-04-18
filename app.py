@@ -606,16 +606,15 @@ def developer_api_dialog(folder_id_str):
             
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("#### Quick Integration Snippets")
-        t1, t2 = st.tabs(["React (MERN)", "Python"])
+        t1, t2, t3, t4 = st.tabs(["HTML (iframe)", "Vanilla JS", "React", "Python"])
         with t1:
-            st.code(f"""// React / Next.js
-import {{ useEffect, useState }} from 'react';
-export default function Gallery() {{
-  const [media, setMedia] = useState([]);
-  useEffect(() => {{ fetch('{endpoint_url}').then(r=>r.text()).then(t=>console.log(t)) }}, []);
-}}""", language="javascript")
+            st.code(f"""\n<iframe src="{endpoint_url}" width="100%" height="500px" style="border:none; border-radius:12px;"></iframe>""", language="html")
         with t2:
-            st.code(f"""import requests\nresp = requests.get('{endpoint_url}')""", language="python")
+            st.code(f"""// Fetch and inject into a container\nfetch('{endpoint_url}')\n  .then(response => response.text())\n  .then(html => {{\n    document.getElementById('gallery-container').innerHTML = html;\n  }});""", language="javascript")
+        with t3:
+            st.code(f"""// React / Next.js\nexport default function Gallery() {{\n  return (\n    <iframe \n      src="{endpoint_url}" \n      style={{{{ width: '100%', height: '500px', border: 'none', borderRadius: '12px' }}}} \n      title="Media Gallery"\n    />\n  );\n}}""", language="javascript")
+        with t4:
+            st.code(f"""import requests\n\n# Fetch the raw HTML content\nresponse = requests.get('{endpoint_url}')\nprint(response.text)""", language="python")
 
 @st.dialog("⚠️ Confirm Deletion")
 def delete_folder_dialog(folder_id, folder_name):
@@ -1528,15 +1527,15 @@ div[data-testid="stPopoverBody"] { z-index: 999999 !important; }
 .media-container-wrapper { position: relative; margin-bottom: 15px; cursor: pointer; }
 .media-container-wrapper:hover .square-media { transform: scale(1.02); }
 
-/* Feature 1: CSS Animated Skeleton Loading State + Perfect Circle Cropping */
+/* Updated: Perfect rounded-rectangle frames instead of circles */
 .square-media { 
-    width: 100%; aspect-ratio: 1/1; overflow: hidden !important; transition: transform 0.2s; border-radius: 50% !important; box-shadow: 0 4px 10px rgba(0,0,0,0.3); 
+    width: 100%; aspect-ratio: 1/1; overflow: hidden !important; transition: transform 0.2s; border-radius: 12px !important; box-shadow: 0 4px 10px rgba(0,0,0,0.3); 
     background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.05) 75%); 
     background-size: 200% 100%; animation: loadingSkeleton 1.5s infinite; border: 1px solid var(--border); 
     display: flex; justify-content: center; align-items: center;
 }
 @keyframes loadingSkeleton { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-.square-media img, .square-media video { width: 100% !important; height: 100% !important; object-fit: cover !important; border-radius: 50% !important; display: block; position: relative; z-index: 2; }
+.square-media img, .square-media video { width: 100% !important; height: 100% !important; object-fit: cover !important; border-radius: 12px !important; display: block; position: relative; z-index: 2; }
 
 [data-testid="column"] { position: relative; z-index: 10; }
 [data-testid="stPopover"] > button { background-color: var(--bg-card) !important; color: var(--text-primary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; height: 38px !important; padding: 0 15px !important; font-weight: 600 !important; box-shadow: 0 2px 5px rgba(0,0,0,0.05) !important; }
